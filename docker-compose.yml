@@ -1,0 +1,16 @@
+services:
+  relay:
+    build: .
+    image: avvio-vt-relay:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # REQUIRED: high-entropy shared secret; the desktop sends it as a bearer token.
+      AVVIO_VT_STATION_KEY: "${AVVIO_VT_STATION_KEY:?set a strong station key}"
+      AVVIO_VT_EXPIRY_DAYS: "14"
+    volumes:
+      - vtdata:/data
+
+volumes:
+  vtdata:
