@@ -47,7 +47,7 @@ func configure(_ app: Application) async throws {
     app.http.server.configuration.hostname = Environment.get("HOST") ?? "0.0.0.0"
 
     // Serve the web tracking app (Public/) at the root, same-origin with the API.
-    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory, defaultFile: "index.html"))
 
     try routes(app, relay)
 

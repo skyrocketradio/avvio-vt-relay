@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
+  <title>Avvio Voice Tracking</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span> Avvio <span class="thin">Voice Tracking</span></div>
+    <div id="whoami" class="whoami hidden"><span id="displayName"></span> <button id="logout" class="ghost">Sign out</button></div>
+  </header>
+
+  <!-- Login -->
+  <section id="loginView" class="view centered">
+    <form id="loginForm" class="card login">
+      <h1>Sign in</h1>
+      <p class="muted">Use your Avvio username and password.</p>
+      <label>Username <input id="username" autocomplete="username" required /></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required /></label>
+      <button class="primary" type="submit">Sign in</button>
+      <p id="loginError" class="error hidden"></p>
+    </form>
+  </section>
+
+  <!-- Slot list -->
+  <section id="listView" class="view hidden">
+    <div class="listhead"><h1>Your voice tracks</h1><button id="refresh" class="ghost">Refresh</button></div>
+    <ul id="slots" class="slots"></ul>
+    <p id="emptyList" class="muted hidden">No voice tracks assigned to you right now.</p>
+  </section>
+
+  <!-- Editor -->
+  <section id="editorView" class="view hidden">
+    <button id="back" class="ghost back">‹ Back</button>
+    <h1 id="editorLabel">Voice track</h1>
+
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-title">Coming out of <b id="outTitle">—</b></div>
+        <canvas class="wave" id="outWave" height="70"></canvas>
+      </div>
+      <div class="lane vt">
+        <div class="lane-title">Your voice track</div>
+        <canvas class="wave" id="vtWave" height="70"></canvas>
+      </div>
+      <div class="lane">
+        <div class="lane-title">Going into <b id="inTitle">—</b></div>
+        <canvas class="wave" id="inWave" height="70"></canvas>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="record-row">
+        <button id="recordBtn" class="record">● Record</button>
+        <span id="recStatus" class="muted">No take yet</span>
+      </div>
+
+      <div class="cue">
+        <label>Start over the previous song (UP)
+          <input type="range" id="upRange" min="0" max="1000" value="800" />
+          <span id="upVal" class="val"></span>
+        </label>
+        <label>Next song starts (into your VT)
+          <input type="range" id="rightRange" min="0" max="1000" value="1000" />
+          <span id="rightVal" class="val"></span>
+        </label>
+        <label>Duck the music to
+          <input type="range" id="duckRange" min="0" max="100" value="30" />
+          <span id="duckVal" class="val"></span>
+        </label>
+      </div>
+
+      <div class="preview-row">
+        <button id="previewBtn" class="primary" disabled>▶ Preview as it airs</button>
+        <button id="stopBtn" class="ghost" disabled>■ Stop</button>
+        <button id="submitBtn" class="submit" disabled>Send to station</button>
+      </div>
+      <p id="editorMsg" class="muted"></p>
+    </div>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>
