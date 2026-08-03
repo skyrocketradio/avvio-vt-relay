@@ -1,8 +1,8 @@
 services:
   relay:
     build: .
-    image: avvio-vt-relay:latest
     restart: unless-stopped
+    pull_policy: build
     ports:
       - "8080:8080"
     environment:
