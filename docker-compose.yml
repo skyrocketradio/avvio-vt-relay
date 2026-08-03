@@ -3,10 +3,11 @@ services:
     build: .
     restart: unless-stopped
     pull_policy: build
-    # Expose the container port for xCloud's per-site Nginx reverse proxy — do NOT
-    # publish a fixed host port (that collides with other sites on a shared server).
-    expose:
-      - "8080"
+    # Publish on a distinctive host port (8477) → container 8080, so xCloud's Nginx
+    # reverse proxy can target it without colliding with 8080/8090 already in use on
+    # the shared server.
+    ports:
+      - "8477:8080"
     environment:
       # REQUIRED: high-entropy shared secret; the desktop sends it as a bearer token.
       AVVIO_VT_STATION_KEY: "${AVVIO_VT_STATION_KEY:?set a strong station key}"
