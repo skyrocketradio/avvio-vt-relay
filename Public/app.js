@@ -224,7 +224,6 @@ async function openSlot(slotId) {
     $("editorLabel").textContent = session.label;
     $("outTitle").textContent = ctxLabel(session.outgoing);
     $("inTitle").textContent = ctxLabel(session.incoming);
-    $("introInfo").textContent = introText(session.incoming);
     $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%";
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
     const host = $("editorHost");
@@ -321,6 +320,28 @@ async function getMicStream() {
   }
 }
 
+// ↑ — start recording, or (once a take exists) "Re-record" = clear back to the opened state
+function onUp() { if (!cur) return; disarmSend(); if (cur.phase === "recorded") resetTake(); else startRecording(); }
+function resetTake() {
+  if (!cur) return;
+  stopEverything();
+  cur.vtBuf = null; cur.wavBlob = null; cur.playMs = null; cur.playing = false;
+  const s = cur.session, out = s.outgoing;
+  cur.outAtT = 0;
+  if (out) {
+    cur.vtAtT = Math.max(0, Math.round(out.snippetDurationMs - 3500));
+    cur.inAtT = out.snippetDurationMs;
+    const introOff = (s.incoming && s.incoming.cues && s.incoming.cues.introEndMs != null)
+      ? Math.max(0, s.incoming.cues.introEndMs - s.incoming.snippetStartMs) : 8000;
+    cur.viewStartT = Math.max(0, out.snippetDurationMs - 4000);
+    cur.viewMs = Math.max(12000, (cur.inAtT + introOff + 4000) - cur.viewStartT);
+  } else { cur.vtAtT = 0; cur.inAtT = 0; cur.viewStartT = null; cur.viewMs = null; }
+  const mf = $("meterFill"); if (mf) mf.style.width = "0";
+  $("submitBtn").disabled = true; $("editorMsg").textContent = "";
+  setPhase("idle");
+  drawTimeline();
+}
+
 // → mark where the next song starts (fires the incoming intro)
 function markNext() {
   if (!cur || cur.phase !== "recording") return;
@@ -405,7 +426,7 @@ function stopEverything() { stopPreview(); stopAudioSources(); if (cur && cur.re
 
 // Buttons + keyboard (mirror the console)
 $("btnLeft").onclick = auditionOutro;
-$("btnUp").onclick = () => startRecording();
+$("btnUp").onclick = onUp;
 $("btnRight").onclick = markNext;
 $("btnDown").onclick = stopRecording;
 $("btnSpace").onclick = togglePlay;
@@ -431,7 +452,7 @@ document.addEventListener("keydown", e => {
   const k = e.key;
   if (k === "Enter") { confirmSend(); e.preventDefault(); return; }
   if (k === "ArrowLeft") { disarmSend(); auditionOutro(); e.preventDefault(); }
-  else if (k === "ArrowUp") { disarmSend(); startRecording(); e.preventDefault(); }
+  else if (k === "ArrowUp") { onUp(); e.preventDefault(); }
   else if (k === "ArrowRight") { markNext(); e.preventDefault(); }
   else if (k === "ArrowDown") { stopRecording(); e.preventDefault(); }
   else if (k === " ") { disarmSend(); togglePlay(); e.preventDefault(); }
@@ -697,15 +718,7 @@ function drawTimeline() {
   cur.geo = { outRect, vtRect, inRect, pxPerMs };
 }
 
-function updateReadout() {
-  if (!cur || !cur.session) return;
-  const m = tlModel(), bits = [];
-  if (m.out) bits.push(`Talk-up: ${((m.outEndT - m.vtStartT) / 1000).toFixed(1)}s of outro left when you start`);
-  if (m.vtDur) bits.push(`VT ${(m.vtDur / 1000).toFixed(1)}s`);
-  if (m.inc) bits.push(`next song at +${((m.inAtT - m.vtAtT) / 1000).toFixed(1)}s`);
-  const post = introText(m.inc);
-  $("introInfo").textContent = bits.join(" · ") + (post ? " · " + post : "");
-}
+function updateReadout() {}   // time readout removed from the editor per design
 
 function tlZoom(factor, anchorX) {
   if (!cur) return;
