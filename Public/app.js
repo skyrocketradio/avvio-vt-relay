@@ -307,7 +307,9 @@ function micFail(msg) { setPhase("idle"); const mf = $("meterFill"); if (mf) mf.
 // Acquire the mic, honoring the chosen input device; fall back to default if that
 // device vanished (unplugged RODE) so recording still works.
 async function getMicStream() {
-  const base = { echoCancellation: true, noiseSuppression: true };
+  // Raw capture: echo-cancellation/noise-suppression/auto-gain would treat the songs
+  // playing during the take as "echo" and duck the voice out at the next-song intro.
+  const base = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
   try {
     return await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId }, ...base } : base });
   } catch (err) {
@@ -477,7 +479,8 @@ function fillSelect(sel, devices, chosen, fallback) {
 }
 async function startMeter() {
   stopMeter();
-  try { meterStream = await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId } } : true }); }
+  const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  try { meterStream = await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId }, ...raw } : raw }); }
   catch (err) { $("audioMsg").textContent = micErrorText(err); return; }
   const src = ctx.createMediaStreamSource(meterStream);
   const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(an);
