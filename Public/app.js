@@ -102,6 +102,8 @@ function hourbarOffset() {
   const tb = document.querySelector(".topbar"), hb = $("hourbar");
   return (tb ? tb.offsetHeight : 48) + (hb && !hb.classList.contains("hidden") ? hb.offsetHeight : 0) + 8;
 }
+// Pin the sticky hour bar right below the header (header height can change when it wraps).
+function positionHourbar() { const tb = document.querySelector(".topbar"), hb = $("hourbar"); if (tb && hb) hb.style.top = tb.offsetHeight + "px"; }
 function buildHourBar(hours, anchors) {
   const bar = $("hourbar"); bar.innerHTML = ""; hourChips = {};
   bar.classList.toggle("hidden", hours.length === 0);
@@ -112,6 +114,7 @@ function buildHourBar(hours, anchors) {
     bar.appendChild(b); hourChips[h] = b;
   }
   setupHourSpy(anchors);
+  positionHourbar();
 }
 function setActiveChip(h) {
   for (const k in hourChips) hourChips[k].classList.toggle("active", Number(k) === Number(h));
@@ -138,7 +141,12 @@ function landInitial(hours) {
   const nowH = new Date().getHours();
   let target = hours[0];
   for (const h of hours) { if (h <= nowH) target = h; }
-  requestAnimationFrame(() => scrollToHour(target, "auto"));
+  setActiveChip(target);
+  requestAnimationFrame(() => {
+    const nl = document.getElementById("nowline");   // land on the on-air time, not the top of the hour
+    if (nl) { const y = nl.getBoundingClientRect().top + window.scrollY - hourbarOffset(); window.scrollTo({ top: Math.max(0, y), behavior: "auto" }); }
+    else scrollToHour(target, "auto");
+  });
 }
 function isTodayDate(d) {
   if (!d) return false;
@@ -156,7 +164,7 @@ function setupHourSpy(anchors) {
 }
 
 function nowDivider() {
-  const li = document.createElement("li"); li.className = "nowline";
+  const li = document.createElement("li"); li.className = "nowline"; li.id = "nowline";
   li.innerHTML = `<span>● ON AIR NOW</span>`;
   return li;
 }
@@ -783,7 +791,7 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
   $("tlOut").onclick = () => tlZoom(1 / 1.4);
   $("tlFit").onclick = () => { if (cur) { const m = tlModel(); cur.viewStartT = m.tMin; cur.viewMs = m.total; drawTimeline(); } };
 })();
-window.addEventListener("resize", () => { if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); });
+window.addEventListener("resize", () => { positionHourbar(); if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); });
 
 // Station name in the header
 fetch("/v1/info").then(r => r.ok ? r.json() : null).then(d => { if (d && d.stationName) $("stationName").textContent = d.stationName; }).catch(() => {});
