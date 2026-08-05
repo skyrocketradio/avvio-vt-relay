@@ -214,8 +214,11 @@ function closeEditor() {
   cur = null;
   return true;
 }
+let opening = false;
 async function openSlot(slotId) {
+  if (opening) return;
   if (cur && !closeEditor()) return;
+  opening = true;
   ensureCtx();
   try {
     const session = await (await api("/v1/me/slots/" + encodeURIComponent(slotId))).json();
@@ -259,6 +262,7 @@ async function openSlot(slotId) {
         await applyLoadedTake(buf, session.existing, session); loaded = true;
       }
     } catch (e) { /* fall through to a fresh editor */ }
+    if (!cur) return;                     // closed mid-load
     if (!loaded) setPhase("idle");
 
     const host = $("editorHost");
@@ -267,6 +271,7 @@ async function openSlot(slotId) {
     host.classList.remove("hidden");
     requestAnimationFrame(() => { drawTimeline(); updateReadout(); host.scrollIntoView({ block: "center", behavior: "smooth" }); });
   } catch (err) { alert(err.message); }
+  finally { opening = false; }
 }
 
 // Load a recorded take (audio + cues) into the editor for listen/reposition/re-record.
@@ -287,6 +292,7 @@ async function fetchAudio(slotId, role) {
 }
 
 function setPhase(p) {
+  if (!cur) return;
   cur.phase = p;
   $("btnUp").textContent = (p === "recorded") ? "↑ Re-record" : "↑ Record";
 }
