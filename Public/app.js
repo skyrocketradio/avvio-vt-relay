@@ -245,16 +245,18 @@ function setPhase(p) {
   $("btnUp").textContent = (p === "recorded") ? "↑ Re-record" : "↑ Record";
 }
 
-// ← audition the outgoing outro
+// ← audition the outgoing outro — start at the visible left edge of the view (matches Preview)
 function auditionOutro() {
   if (!cur || !cur.outBuf) return;
   stopAudioSources();
-  const c = ctx, dur = cur.outBuf.duration;
-  const lead = Math.min(dur, (cur.session.leadMs || 7000) / 1000 + 5);
+  const c = ctx, dur = cur.outBuf.duration, outAt = cur.outAtT || 0;
+  const outDur = cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : dur * 1000;
+  const startT = (cur.viewStartT != null) ? cur.viewStartT : (outAt + outDur - 4000);
+  const offset = clamp((startT - outAt) / 1000, 0, dur);
   const g = c.createGain(); const s = c.createBufferSource();
   s.buffer = cur.outBuf; s.connect(g); g.connect(c.destination);
-  s.start(0, Math.max(0, dur - lead));
-  cur.outSrc = s; cur.outGain = g; cur.auditionStart = c.currentTime - Math.max(0, dur - lead);
+  s.start(0, offset);
+  cur.outSrc = s; cur.outGain = g; cur.auditionStart = c.currentTime - offset;
   if (cur.phase === "idle" || cur.phase === "recorded") setPhase("audition");
 }
 
