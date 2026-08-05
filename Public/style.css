@@ -93,6 +93,8 @@ canvas.wave { width: 100%; height: 70px; display: block; background: var(--panel
 .controls { display: flex; flex-direction: column; gap: 18px; }
 .record-row { display: flex; align-items: center; gap: 14px; }
 .cue { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+#editorMsg { margin: 0; }
+#editorMsg:empty { display: none; }   /* no blank paragraph space when there's no message */
 .cue label { color: var(--text); font-size: 14px; }
 .val { color: var(--yellow); font-variant-numeric: tabular-nums; font-size: 13px; }
 .preview-row { display: flex; gap: 10px; flex-wrap: wrap; }
