@@ -5,7 +5,7 @@ const $ = id => document.getElementById(id);
 let token = sessionStorage.getItem("vt_token") || null;
 let me = { userID: Number(sessionStorage.getItem("vt_uid") || 0), displayName: sessionStorage.getItem("vt_name") || "" };
 let ctx = null;
-let dates = [], currentDate = null, logRows = [];
+let dates = [], currentDate = null, logRows = [], mySlots = {};
 let cur = null;           // editor working state
 let previewNodes = [];
 let hourChips = {}, hourObserver = null;
@@ -65,6 +65,7 @@ async function loadLog(date, focusSlot) {
   if (!date) return;
   try {
     const view = await (await api("/v1/me/log/" + encodeURIComponent(date))).json();
+    try { const s = await (await api("/v1/me/slots")).json(); mySlots = {}; for (const x of s) mySlots[x.slotId] = x; } catch (e) { mySlots = {}; }
     logRows = view.entries || [];
     $("logTitle").textContent = "Log — " + prettyDate(date);
     renderLog(view, focusSlot);
@@ -164,22 +165,26 @@ function row(e, now) {
   const li = document.createElement("li");
   const at = e.airTimeISO ? Date.parse(e.airTimeISO) : 0;
   const past = now && at && at < now;
-  const mineEmpty = e.isEmptyVoiceTrack && e.assignedUserID === me.userID;
+  // A slot the tracker has already recorded (submitted) shows as recorded even before
+  // the station pulls it in — the relay tracks the result per slot.
+  const recorded = !!(e.slotId && mySlots[e.slotId] && mySlots[e.slotId].hasResult);
+  const mineOpen = e.isEmptyVoiceTrack && e.assignedUserID === me.userID && !recorded;
   li.className = "row" + (e.isRemark ? " remark" : "") + (e.isVoiceTrack ? " vt" : "")
-    + (mineEmpty ? " mine" : "") + (past ? " past" : "") + (e.kind === "stopSet" ? " spot" : "");
+    + (mineOpen ? " mine" : "") + (past ? " past" : "") + (e.kind === "stopSet" ? " spot" : "");
 
   const time = e.airTimeISO ? new Date(e.airTimeISO).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   let title = e.title, sub = e.artist || "";
   if (e.isRemark) { title = e.markerLabel || e.title || "Liner"; sub = ""; }
   else if (e.kind === "stopSet") { title = "Commercial break"; sub = ""; }
-  else if (e.isEmptyVoiceTrack) { sub = mineEmpty ? "Your voice track — tap to record" : "Voice track"; }
+  else if (e.isEmptyVoiceTrack) { sub = recorded ? "Your voice track — recorded" : (mineOpen ? "Your voice track — tap to record" : "Voice track"); }
   else if (e.isVoiceTrack) { sub = "Voice track — recorded"; }
 
   li.innerHTML = `<div class="time">${time}</div>
     <div class="body"><div class="title">${escapeHtml(title)}</div>${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}</div>
     <div class="tag"></div>`;
   const tag = li.querySelector(".tag");
-  if (e.isEmptyVoiceTrack && mineEmpty) { tag.innerHTML = `<button class="rec">● Record</button>`; li.onclick = () => openSlot(e.slotId); }
+  if (recorded && e.assignedUserID === me.userID) { tag.innerHTML = `<span class="badge done">Recorded</span>`; li.onclick = () => openSlot(e.slotId); }  // tap to re-record
+  else if (mineOpen) { tag.innerHTML = `<button class="rec">● Record</button>`; li.onclick = () => openSlot(e.slotId); }
   else if (e.kind === "voiceTrack") { tag.innerHTML = `<span class="badge done">Recorded</span>`; }
   else if (e.isEmptyVoiceTrack) { tag.innerHTML = `<span class="badge">VT</span>`; }
   if (e.slotId) li.dataset.slot = e.slotId;
