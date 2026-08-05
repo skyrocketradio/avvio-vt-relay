@@ -42,9 +42,9 @@ $("loginForm").onsubmit = async e => {
   } catch (err) { $("loginError").textContent = err.message; $("loginError").classList.remove("hidden"); }
 };
 $("logout").onclick = logout;
-$("refresh").onclick = () => { closeEditor(); loadLog(currentDate); };
+$("refresh").onclick = () => { if (closeEditor()) loadLog(currentDate); };
 $("back").onclick = closeEditor;
-$("datePicker").onchange = () => { closeEditor(); currentDate = $("datePicker").value; loadLog(currentDate); };
+$("datePicker").onchange = () => { if (!closeEditor()) { $("datePicker").value = currentDate; return; } currentDate = $("datePicker").value; loadLog(currentDate); };
 
 async function afterLogin() {
   $("displayName").textContent = me.displayName;
@@ -203,21 +203,23 @@ function row(e, now) {
 // Collapse the inline editor and park its node back on <body> so a log re-render
 // (which clears #log) never destroys the canvas + its event wiring.
 function closeEditor() {
+  if (cur && cur.dirty) { if (!confirm("You have unsent changes to this voice track. Discard them and close?")) return false; }
   disarmSend();
   stopEverything();
   const h = $("editorHost");
   if (h) { h.classList.add("hidden"); document.body.appendChild(h); }
   cur = null;
+  return true;
 }
 async function openSlot(slotId) {
-  if (cur) closeEditor();
+  if (cur && !closeEditor()) return;
   ensureCtx();
   try {
     const session = await (await api("/v1/me/slots/" + encodeURIComponent(slotId))).json();
     const outBuf = session.outgoing ? await fetchAudio(slotId, "outgoing") : null;
     const inBuf = session.incoming ? await fetchAudio(slotId, "incoming") : null;
     cur = {
-      slotId, session, outBuf, inBuf, vtBuf: null, wavBlob: null,
+      slotId, session, outBuf, inBuf, vtBuf: null, wavBlob: null, dirty: false,
       phase: "idle", recStart: 0, recChunks: null, recProc: null, recStream: null, recMute: null,
       duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
@@ -239,11 +241,30 @@ async function openSlot(slotId) {
     $("inTitle").textContent = ctxLabel(session.incoming);
     $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%";
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
+
+    // If this slot was already recorded, load the take so they can listen / reposition / re-record.
+    let loaded = false;
+    if (mySlots[slotId] && mySlots[slotId].hasResult) {
+      try {
+        const res = await (await api(`/v1/me/slots/${encodeURIComponent(slotId)}/result`)).json();
+        const buf = await (await api(`/v1/me/slots/${encodeURIComponent(slotId)}/result/audio`)).arrayBuffer();
+        cur.vtBuf = await ensureCtx().decodeAudioData(buf.slice(0));
+        cur.wavBlob = wavFromBuffer(cur.vtBuf);   // lets them resend (repositioned) without re-recording
+        const outStart = session.outgoing ? session.outgoing.snippetStartMs : 0;
+        const c = res.cues || {};
+        if (c.outgoingSegueMs != null) cur.vtAtT = Math.round((cur.outAtT || 0) + (c.outgoingSegueMs - outStart));
+        cur.inAtT = Math.round((cur.vtAtT || 0) + (c.vtSegueMs || 0));
+        if (c.fadeTargetGain != null) { cur.duck = Math.round(c.fadeTargetGain * 100); $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%"; }
+        cur.viewStartT = null; cur.viewMs = null;   // fit the whole take for editing
+        setPhase("recorded"); $("submitBtn").disabled = false; loaded = true;
+      } catch (e) { /* fall through to a fresh editor */ }
+    }
+    if (!loaded) setPhase("idle");
+
     const host = $("editorHost");
     const row = $("log").querySelector(`.row[data-slot="${slotId}"]`);
     if (row) row.after(host); else $("log").appendChild(host);
     host.classList.remove("hidden");
-    setPhase("idle");
     requestAnimationFrame(() => { drawTimeline(); updateReadout(); host.scrollIntoView({ block: "center", behavior: "smooth" }); });
   } catch (err) { alert(err.message); }
 }
@@ -353,6 +374,7 @@ function resetTake() {
   } else { cur.vtAtT = 0; cur.inAtT = 0; cur.viewStartT = null; cur.viewMs = null; }
   const mf = $("meterFill"); if (mf) mf.style.width = "0";
   $("submitBtn").disabled = true; $("editorMsg").textContent = "";
+  cur.dirty = false;   // cleared back to a blank slate; the station copy (if any) is untouched
   setPhase("idle");
   drawTimeline();
 }
@@ -383,7 +405,7 @@ function stopRecording() {
   let o = 0; for (const c of cur.recChunks) { samples.set(c, o); o += c.length; }
   const sr = ctx.sampleRate;
   const vt = ctx.createBuffer(1, Math.max(1, samples.length), sr); vt.copyToChannel(samples, 0);
-  cur.vtBuf = vt; cur.wavBlob = encodeWAV(samples, sr);
+  cur.vtBuf = vt; cur.wavBlob = encodeWAV(samples, sr); cur.dirty = true;
   cur.recProc = cur.recStream = null;
   const mf = $("meterFill"); if (mf) mf.style.width = "0";
   setPhase("recorded"); $("submitBtn").disabled = false;
@@ -596,6 +618,7 @@ async function doSend() {
   fd.append("voice", cur.wavBlob, "voice.wav");
   try {
     await api(`/v1/me/slots/${encodeURIComponent(cur.slotId)}/result`, { method: "POST", body: fd });
+    if (cur) cur.dirty = false;
     $("editorMsg").textContent = "Sent! It will import at the station.";
     setTimeout(() => { const d = currentDate; closeEditor(); loadLog(d); }, 900);
   } catch (err) { $("editorMsg").textContent = "Failed: " + err.message; $("submitBtn").disabled = false; }
@@ -617,6 +640,7 @@ function encodeWAV(samples, sampleRate) {
   let off = 44; for (let i = 0; i < samples.length; i++) { let s = Math.max(-1, Math.min(1, samples[i])); view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true); off += 2; }
   return new Blob([view], { type: "audio/wav" });
 }
+function wavFromBuffer(buf) { return encodeWAV(buf.getChannelData(0), buf.sampleRate); }   // re-encode a loaded take for resend
 function peaksFromBuffer(buf, n = 400) {
   const data = buf.getChannelData(0), block = Math.max(1, Math.floor(data.length / n)), out = [];
   for (let i = 0; i < n; i++) { let p = 0; for (let j = 0; j < block; j++) { const v = Math.abs(data[i * block + j] || 0); if (v > p) p = v; } out.push(p); }
@@ -771,9 +795,9 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
     if (!tlDrag) return;
     const x = tlXY(e).x, dxMs = (x - tlDrag.startX) / tlDrag.pxPerMs;
     if (Math.abs(x - tlDrag.startX) > 3) tlDrag.moved = true;
-    if (tlDrag.t === "out") { cur.outAtT = Math.round(tlDrag.origOut + dxMs); updateReadout(); }
-    else if (tlDrag.t === "vt") { cur.vtAtT = Math.round(tlDrag.origVt + dxMs); updateReadout(); }
-    else if (tlDrag.t === "in") { cur.inAtT = Math.round(Math.max(cur.vtAtT || 0, tlDrag.origIn + dxMs)); updateReadout(); }
+    if (tlDrag.t === "out") { cur.outAtT = Math.round(tlDrag.origOut + dxMs); cur.dirty = true; updateReadout(); }
+    else if (tlDrag.t === "vt") { cur.vtAtT = Math.round(tlDrag.origVt + dxMs); cur.dirty = true; updateReadout(); }
+    else if (tlDrag.t === "in") { cur.inAtT = Math.round(Math.max(cur.vtAtT || 0, tlDrag.origIn + dxMs)); cur.dirty = true; updateReadout(); }
     else if (tlDrag.moved) { cur.viewStartT = tlDrag.origView - dxMs; }
     drawTimeline();
   });

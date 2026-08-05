@@ -144,6 +144,16 @@ actor Storage {
         return fm.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// The result JSON + voice for a slot the tracker already recorded (for edit/resend).
+    func slotResultJSON(_ slotId: String) -> Data? {
+        guard let meta = slotMeta(slotId), let rid = meta.resultId else { return nil }
+        return try? Data(contentsOf: resultDir(rid).appendingPathComponent("result.json"))
+    }
+    func slotResultVoiceURL(_ slotId: String) -> URL? {
+        guard let meta = slotMeta(slotId), let rid = meta.resultId else { return nil }
+        return resultVoiceURL(rid)
+    }
+
     func ackResult(_ resultId: String, now: Date) {
         guard var meta = readMeta(ResultMeta.self, in: resultDir(resultId)) else { return }
         meta.ackedAtISO = iso(now)

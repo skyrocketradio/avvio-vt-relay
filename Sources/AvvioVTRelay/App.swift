@@ -230,6 +230,23 @@ func routes(_ app: Application, _ relay: Relay) throws {
         return req.fileio.streamFile(at: url.path)
     }
 
+    // The tracker's own recorded take (cues + audio) so they can edit and resend it.
+    me.get("slots", ":slotId", "result") { req async throws -> Response in
+        let info = try await requireTracker(req, relay)
+        let slotId = req.parameters.get("slotId") ?? ""
+        guard let meta = await relay.storage.slotMeta(slotId), meta.assignedUserID == info.userID,
+              let json = await relay.storage.slotResultJSON(slotId) else { throw Abort(.notFound) }
+        var headers = HTTPHeaders(); headers.contentType = .json
+        return Response(status: .ok, headers: headers, body: .init(data: json))
+    }
+    me.get("slots", ":slotId", "result", "audio") { req async throws -> Response in
+        let info = try await requireTracker(req, relay)
+        let slotId = req.parameters.get("slotId") ?? ""
+        guard let meta = await relay.storage.slotMeta(slotId), meta.assignedUserID == info.userID,
+              let url = await relay.storage.slotResultVoiceURL(slotId) else { throw Abort(.notFound) }
+        return req.fileio.streamFile(at: url.path)
+    }
+
     me.post("slots", ":slotId", "claim") { req async throws -> Response in
         let info = try await requireTracker(req, relay)
         let slotId = req.parameters.get("slotId") ?? ""
