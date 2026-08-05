@@ -377,7 +377,11 @@ function stopRecording() {
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
 function defaultStartMs() { const m = tlModel(); return m.out ? Math.max(m.outStartT, m.outEndT - 4000) : m.tMin; }   // play the last ~4s of outro into the transition
-function togglePlay() { if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
+function togglePlay() {
+  if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return;
+  if (cur.playing) { pausePlay(); return; }
+  previewFrom(cur.viewStartT != null ? cur.viewStartT : defaultStartMs());   // Preview always starts at the far left of the view
+}
 
 // Play the composite from an arbitrary timeline position, ducking the beds under the
 // VT, and sweep a playhead. Elements already underway at `fromT` start mid-buffer.
@@ -773,6 +777,9 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
   $("tlFit").onclick = () => { if (cur) { const m = tlModel(); cur.viewStartT = m.tMin; cur.viewMs = m.total; drawTimeline(); } };
 })();
 window.addEventListener("resize", () => { if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); });
+
+// Station name in the header
+fetch("/v1/info").then(r => r.ok ? r.json() : null).then(d => { if (d && d.stationName) $("stationName").textContent = d.stationName; }).catch(() => {});
 
 // Boot
 if (token) { ensureCtx(); afterLogin(); } else { show("loginView"); }

@@ -106,6 +106,9 @@ private func requireTracker(_ req: Request, _ relay: Relay) async throws -> Toke
 func routes(_ app: Application, _ relay: Relay) throws {
     app.get("v1", "health") { _ in "ok" }
 
+    // Public station info for the web/iOS header.
+    app.get("v1", "info") { _ in InfoResponse(stationName: Environment.get("AVVIO_VT_STATION_NAME") ?? "Skyrocket Radio") }
+
     // ---- Station (desktop) endpoints ----
     let station = app.grouped("v1", "station")
 

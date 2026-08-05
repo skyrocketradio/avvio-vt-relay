@@ -12,3 +12,4 @@ extension StationStatus: Content {}
 
 struct RefreshResponse: Content { var expiresAtISO: String }
 struct WhoAmI: Content { var userID: Int64; var displayName: String }
+struct InfoResponse: Content { var stationName: String }
