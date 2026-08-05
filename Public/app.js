@@ -209,7 +209,7 @@ async function openSlot(slotId) {
       duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
       outAtT: 0,
-      vtAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
+      vtAtT: 0,                                                                 // talk-up defaults to the outro's far-left; drag right as needed
       inAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
       viewStartT: null, viewMs: null, playMs: null, playRAF: 0, playing: false, geo: null,
     };
