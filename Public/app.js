@@ -206,10 +206,12 @@ async function openSlot(slotId) {
     cur = {
       slotId, session, outBuf, inBuf, vtBuf: null, wavBlob: null,
       phase: "idle", recStart: 0, recChunks: null, recProc: null, recStream: null, recMute: null,
-      upFileMs: session.outgoing ? session.outgoing.snippetStartMs + Math.floor((session.outgoing.snippetDurationMs) * 0.7) : 0,
-      rightMs: 0, duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
+      duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
-      zoom: 1, panMs: 0, playMs: null, playRAF: 0, playing: false, geo: null,
+      outAtT: 0,
+      vtAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
+      inAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
+      viewStartT: null, viewMs: null, playMs: null, playRAF: 0, playing: false, geo: null,
     };
     window._cur = cur; window._ctx = ctx;
     $("editorLabel").textContent = session.label;
@@ -259,7 +261,8 @@ async function startRecording() {
   // Capture UP point from the outro's current playback position (if auditioning).
   if (cur.outBuf && cur.outSrc) {
     const elapsed = Math.min(cur.outBuf.duration, Math.max(0, ctx.currentTime - cur.auditionStart));
-    cur.upFileMs = (cur.session.outgoing.snippetStartMs || 0) + Math.round(elapsed * 1000);
+    cur.vtAtT = (cur.outAtT || 0) + Math.round(elapsed * 1000);   // talk starts here, over the outro
+    cur.inAtT = cur.vtAtT;                                        // next song not marked yet
     if (cur.outGain) cur.outGain.gain.setTargetAtTime(cur.duck / 100, ctx.currentTime, 0.1); // duck under the voice
   } else if (cur.outBuf) {
     auditionOutro();
@@ -283,7 +286,7 @@ async function startRecording() {
     src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
     cur.recChunks = chunks; cur.recProc = proc; cur.recStream = stream; cur.recMute = mute; cur.recSrc = src;
     cur.recStart = ctx.currentTime;
-    cur.vtBuf = null; cur.wavBlob = null; cur.rightMs = 0;
+    cur.vtBuf = null; cur.wavBlob = null;
     setPhase("recording"); $("submitBtn").disabled = true; $("editorMsg").textContent = ""; drawTimeline();
   } catch (err) {
     stopAudioSources();
@@ -312,7 +315,7 @@ async function getMicStream() {
 // → mark where the next song starts (fires the incoming intro)
 function markNext() {
   if (!cur || cur.phase !== "recording") return;
-  cur.rightMs = Math.round((ctx.currentTime - cur.recStart) * 1000);
+  cur.inAtT = (cur.vtAtT || 0) + Math.round((ctx.currentTime - cur.recStart) * 1000);
   if (cur.inBuf) {
     const g = ctx.createGain(); const s = ctx.createBufferSource();
     s.buffer = cur.inBuf; s.connect(g); g.connect(ctx.destination);
@@ -329,7 +332,7 @@ function stopRecording() {
   if (cur.recProc) { cur.recProc.disconnect(); cur.recSrc.disconnect(); cur.recMute.disconnect(); }
   if (cur.recStream) cur.recStream.getTracks().forEach(t => t.stop());
   stopAudioSources();
-  if (!cur.rightMs) cur.rightMs = ms;                       // never marked → next fires at end
+  if ((cur.inAtT || 0) <= (cur.vtAtT || 0)) cur.inAtT = (cur.vtAtT || 0) + ms;   // never marked → next fires at end
   const total = (cur.recChunks || []).reduce((n, c) => n + c.length, 0);
   const samples = new Float32Array(total);
   let o = 0; for (const c of cur.recChunks) { samples.set(c, o); o += c.length; }
@@ -343,35 +346,35 @@ function stopRecording() {
 }
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
-function defaultStartMs() { const m = tlModel(); return Math.max(0, m.Tvt - Math.min(m.Tvt, (cur.session.leadMs || 7000))); }
+function defaultStartMs() { const m = tlModel(); return Math.max(m.tMin, m.vtStartT - (cur.session.leadMs || 7000)); }
 function togglePlay() { if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
 
-// Play the composite from an arbitrary composite-ms, ducking the beds under the VT,
-// and sweep a playhead. Elements already underway at `fromMs` start mid-buffer.
-function previewFrom(fromMs) {
+// Play the composite from an arbitrary timeline position, ducking the beds under the
+// VT, and sweep a playhead. Elements already underway at `fromT` start mid-buffer.
+function previewFrom(fromT) {
   if (!cur) return;
   stopSources();
   ensureCtx(); applyOutput();
   const m = tlModel(), duck = cur.duck / 100;
-  const from = clamp(fromMs == null ? 0 : fromMs, 0, m.total);
+  const from = clamp(fromT == null ? m.tMin : fromT, m.tMin, m.tMax);
   const t0 = ctx.currentTime + 0.1;
-  const rt = ms => t0 + (ms - from) / 1000;
-  const vtEnd = m.Tvt + m.vtDur;
-  if (cur.outBuf && m.outDur > from) {                                    // outro [0, outDur]
+  const rt = T => t0 + (T - from) / 1000;
+  if (cur.outBuf && m.outEndT > from) {                                   // outro
     const g = ctx.createGain(), s = ctx.createBufferSource(); s.buffer = cur.outBuf; s.connect(g); g.connect(ctx.destination);
-    if (from < m.Tvt) { g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, rt(m.Tvt)); g.gain.linearRampToValueAtTime(duck, rt(m.Tvt) + 0.4); }
-    else g.gain.setValueAtTime(duck, t0);
-    s.start(t0, from / 1000); previewNodes.push(s, g);
+    const startAt = from <= m.outStartT ? rt(m.outStartT) : t0, offset = Math.max(0, from - m.outStartT) / 1000;
+    if (Math.max(m.outStartT, from) < m.vtStartT) { g.gain.setValueAtTime(1, Math.max(t0, startAt)); g.gain.setValueAtTime(1, rt(m.vtStartT)); g.gain.linearRampToValueAtTime(duck, rt(m.vtStartT) + 0.4); }
+    else g.gain.setValueAtTime(duck, Math.max(t0, startAt));
+    s.start(startAt, offset); previewNodes.push(s, g);
   }
-  if (cur.vtBuf && vtEnd > from) {                                        // VT [Tvt, vtEnd]
+  if (cur.vtBuf && m.vtEndT > from) {                                     // VT
     const s = ctx.createBufferSource(); s.buffer = cur.vtBuf; s.connect(ctx.destination);
-    if (from <= m.Tvt) s.start(rt(m.Tvt)); else s.start(t0, (from - m.Tvt) / 1000);
+    if (from <= m.vtStartT) s.start(rt(m.vtStartT)); else s.start(t0, (from - m.vtStartT) / 1000);
     previewNodes.push(s);
   }
-  if (cur.inBuf && (m.Tin + m.inDur) > from) {                            // incoming [Tin, Tin+inDur]
+  if (cur.inBuf && m.inEndT > from) {                                     // incoming
     const g = ctx.createGain(), s = ctx.createBufferSource(); s.buffer = cur.inBuf; s.connect(g); g.connect(ctx.destination);
-    const startAt = from <= m.Tin ? rt(m.Tin) : t0, offset = from <= m.Tin ? 0 : (from - m.Tin) / 1000;
-    if (from < vtEnd) { g.gain.setValueAtTime(duck, Math.max(t0, startAt)); g.gain.setValueAtTime(duck, rt(vtEnd)); g.gain.linearRampToValueAtTime(1, rt(vtEnd) + 0.4); }
+    const startAt = from <= m.inStartT ? rt(m.inStartT) : t0, offset = Math.max(0, from - m.inStartT) / 1000;
+    if (Math.max(m.inStartT, from) < m.vtEndT) { g.gain.setValueAtTime(duck, Math.max(t0, startAt)); g.gain.setValueAtTime(duck, rt(m.vtEndT)); g.gain.linearRampToValueAtTime(1, rt(m.vtEndT) + 0.4); }
     else g.gain.setValueAtTime(1, Math.max(t0, startAt));
     s.start(startAt, offset); previewNodes.push(s, g);
   }
@@ -380,7 +383,7 @@ function previewFrom(fromMs) {
     if (!cur || !cur.playing) return;
     cur.playMs = from + (ctx.currentTime - t0) * 1000;
     drawTimeline();
-    if (cur.playMs < m.total + 300) cur.playRAF = requestAnimationFrame(step); else stopPreview();
+    if (cur.playMs < m.tMax + 300) cur.playRAF = requestAnimationFrame(step); else stopPreview();
   };
   cur.playRAF = requestAnimationFrame(step);
 }
@@ -530,11 +533,12 @@ async function doSend() {
   if (!cur || !cur.wavBlob) return;
   disarmSend();
   $("submitBtn").disabled = true; $("editorMsg").textContent = "Sending…";
+  const c = cuesFromPositions();
   const result = {
     version: 1, fingerprint: cur.session.fingerprint,
     voice: { filename: "voice.wav", container: "wav", sampleRate: ctx.sampleRate, channels: 1, durationMs: bufMs(cur.vtBuf) },
     voiceDurationMs: bufMs(cur.vtBuf),
-    cues: { outgoingSegueMs: cur.upFileMs, vtSegueMs: cur.rightMs, fadeEndMs: null, fadeTargetGain: cur.duck / 100 },
+    cues: { outgoingSegueMs: c.upFileMs, vtSegueMs: c.rightMs, fadeEndMs: null, fadeTargetGain: cur.duck / 100 },
     recordedByUserID: me.userID, recordedByName: me.displayName, recordedAtISO: new Date().toISOString(),
   };
   const fd = new FormData();
@@ -572,18 +576,31 @@ function peaksFromBuffer(buf, n = 400) {
 const TL = { TOP: 8, LANE_H: 52, GAP: 12, PADX: 10, RULER: 20 };  // LANE_H/GAP/RULER recomputed per draw for mobile
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-// The whole transition on one shared time axis (ms). t=0 = start of the outgoing snippet.
+// Each block's left edge lives on `cur` as an absolute ms position (outAtT/vtAtT/inAtT).
+// Dragging a block moves ONLY that block; station cues are derived from the positions.
 function tlModel() {
   const s = cur.session, out = s.outgoing, inc = s.incoming;
   const outDur = out ? out.snippetDurationMs : 0;
   const inDur = inc ? inc.snippetDurationMs : 0;
   const vtDur = cur.vtBuf ? bufMs(cur.vtBuf) : 0;
-  const Tvt = out ? clamp(cur.upFileMs - out.snippetStartMs, 0, outDur) : 0;   // where the talk starts over the outro
-  const rightMs = cur.rightMs || 0;
-  const Tin = Tvt + rightMs;                                                    // where the next song fires
-  const post = (inc && inc.cues && inc.cues.introEndMs != null) ? Tin + (inc.cues.introEndMs - inc.snippetStartMs) : null;
-  const total = Math.max(outDur, Tin + inDur, Tvt + vtDur, 1000);
-  return { out, inc, outDur, inDur, vtDur, Tvt, rightMs, Tin, post, total };
+  const outAtT = cur.outAtT || 0, vtAtT = cur.vtAtT || 0, inAtT = cur.inAtT || 0;
+  const outStartT = outAtT, outEndT = outAtT + outDur;
+  const vtStartT = vtAtT, vtEndT = vtAtT + vtDur;
+  const inStartT = inAtT, inEndT = inAtT + inDur;
+  const upT = clamp(vtAtT, outStartT, outEndT);                                 // talk-up marker, drawn on the outro
+  const postT = (inc && inc.cues && inc.cues.introEndMs != null) ? inAtT + (inc.cues.introEndMs - inc.snippetStartMs) : null;
+  const tMin = Math.min(outStartT, vtStartT, inStartT, 0);
+  const tMax = Math.max(outEndT, vtEndT, inEndT, 1000);
+  return { out, inc, outDur, inDur, vtDur, outAtT, vtAtT, inAtT, outStartT, outEndT, vtStartT, vtEndT, inStartT, inEndT, upT, postT, tMin, tMax, total: tMax - tMin };
+}
+
+// Station cues derived from block positions: where the VT enters the outro, and how
+// far into the VT the next song fires.
+function cuesFromPositions() {
+  const m = tlModel(), outStart = m.out ? m.out.snippetStartMs : 0;
+  const upFileMs = m.out ? Math.round(clamp(outStart + (m.vtAtT - m.outAtT), outStart, outStart + m.outDur)) : 0;
+  const rightMs = Math.max(0, Math.round(m.inAtT - m.vtAtT));
+  return { upFileMs, rightMs };
 }
 
 function roundRect(g, x, y, w, h, r) {
@@ -614,36 +631,35 @@ function drawTimeline() {
   const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
 
   const m = tlModel();
+  if (cur.viewMs == null) { cur.viewStartT = m.tMin; cur.viewMs = m.total; }        // frame everything on first draw
   const innerW = W - 2 * TL.PADX;
-  const pxPerMs = (innerW / m.total) * (cur.zoom || 1);
-  const visibleMs = innerW / pxPerMs;
-  cur.panMs = clamp(cur.panMs || 0, 0, Math.max(0, m.total - visibleMs));
-  const xOf = ms => TL.PADX + (ms - cur.panMs) * pxPerMs;
+  const pxPerMs = innerW / cur.viewMs;
+  const xOf = T => TL.PADX + (T - cur.viewStartT) * pxPerMs;
   const yOut = TL.TOP, yVt = TL.TOP + TL.LANE_H + TL.GAP, yIn = TL.TOP + 2 * (TL.LANE_H + TL.GAP);
 
   for (const y of [yOut, yVt, yIn]) { g.fillStyle = "#0e1216"; roundRect(g, TL.PADX, y, innerW, TL.LANE_H, 6); g.fill(); }
 
   let outRect = null;
   if (m.out) {
-    const ox = xOf(0), ow = m.outDur * pxPerMs;
+    const ox = xOf(m.outStartT), ow = m.outDur * pxPerMs;
     drawBlock(g, ox, yOut, ow, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
-    g.fillStyle = "rgba(226,59,59,.12)"; g.fillRect(xOf(m.Tvt), yOut, (m.outDur - m.Tvt) * pxPerMs, TL.LANE_H);
-    vline(g, xOf(m.Tvt), yOut, TL.LANE_H, "#e23b3b");
+    g.fillStyle = "rgba(226,59,59,.12)"; g.fillRect(xOf(m.upT), yOut, (m.outEndT - m.upT) * pxPerMs, TL.LANE_H);
+    vline(g, xOf(m.upT), yOut, TL.LANE_H, "#e23b3b");
     outRect = { x: ox, y: yOut, w: ow, h: TL.LANE_H };
   }
   let vtRect = null;
   if (m.vtDur > 0) {
-    const x0 = xOf(m.Tvt), w = m.vtDur * pxPerMs;
+    const x0 = xOf(m.vtStartT), w = m.vtDur * pxPerMs;
     drawBlock(g, x0, yVt, w, TL.LANE_H, peaksFromBuffer(cur.vtBuf), "#74d69a", "#16341f", "#2f7d4f");
     vtRect = { x: x0, y: yVt, w, h: TL.LANE_H };
   }
   let inRect = null;
   if (m.inc) {
-    const x0 = xOf(m.Tin), w = m.inDur * pxPerMs;
+    const x0 = xOf(m.inStartT), w = m.inDur * pxPerMs;
     drawBlock(g, x0, yIn, w, TL.LANE_H, m.inc.waveform, "#8ea3b8", "#141b22", "#3a444f");
-    if (m.post != null) {
-      g.fillStyle = "rgba(199,149,16,.16)"; g.fillRect(xOf(m.Tin), yIn, (m.post - m.Tin) * pxPerMs, TL.LANE_H);
-      vline(g, xOf(m.post), yIn, TL.LANE_H, "#c79510"); tlLabel(g, "POST", xOf(m.post) + 4, yIn + 13, "#e8c874");
+    if (m.postT != null) {
+      g.fillStyle = "rgba(199,149,16,.16)"; g.fillRect(xOf(m.inStartT), yIn, (m.postT - m.inStartT) * pxPerMs, TL.LANE_H);
+      vline(g, xOf(m.postT), yIn, TL.LANE_H, "#c79510"); tlLabel(g, "POST", xOf(m.postT) + 4, yIn + 13, "#e8c874");
     }
     inRect = { x: x0, y: yIn, w, h: TL.LANE_H };
   }
@@ -654,36 +670,40 @@ function drawTimeline() {
 
   const rulerY = yIn + TL.LANE_H + 5;
   g.fillStyle = "#242c34"; g.fillRect(TL.PADX, rulerY, innerW, 1);
-  const stepS = visibleMs > 60000 ? 15 : visibleMs > 30000 ? 10 : visibleMs > 12000 ? 5 : visibleMs > 5000 ? 2 : 1;
-  for (let s = Math.ceil(cur.panMs / 1000 / stepS) * stepS; s * 1000 <= cur.panMs + visibleMs; s += stepS) {
-    const x = xOf(s * 1000); if (x < TL.PADX || x > W - TL.PADX) continue;
+  const stepS = cur.viewMs > 60000 ? 15 : cur.viewMs > 30000 ? 10 : cur.viewMs > 12000 ? 5 : cur.viewMs > 5000 ? 2 : 1;
+  for (let s = Math.ceil(cur.viewStartT / 1000 / stepS) * stepS; s * 1000 <= cur.viewStartT + cur.viewMs; s += stepS) {
+    if (s < 0) continue;
+    const x = xOf(s * 1000); if (x < TL.PADX - 1 || x > W - TL.PADX + 1) continue;
     g.fillStyle = "#2c343d"; g.fillRect(x, rulerY, 1, 4);
     g.fillStyle = "#6b7684"; g.font = "10px -apple-system, sans-serif"; g.fillText(s + "s", x + 2, rulerY + 14);
   }
 
-  if (cur.playMs != null && cur.playMs >= cur.panMs && cur.playMs <= cur.panMs + visibleMs)
+  if (cur.playMs != null && cur.playMs >= cur.viewStartT && cur.playMs <= cur.viewStartT + cur.viewMs)
     vline(g, xOf(cur.playMs), TL.TOP, 3 * TL.LANE_H + 2 * TL.GAP, "#ffffff");
 
-  cur.geo = { outRect, vtRect, inRect, pxPerMs, visibleMs, total: m.total };
+  cur.geo = { outRect, vtRect, inRect, pxPerMs };
 }
 
 function updateReadout() {
   if (!cur || !cur.session) return;
   const m = tlModel(), bits = [];
-  if (m.out) bits.push(`Talk-up: ${((m.outDur - m.Tvt) / 1000).toFixed(1)}s of outro left when you start`);
+  if (m.out) bits.push(`Talk-up: ${((m.outEndT - m.vtStartT) / 1000).toFixed(1)}s of outro left when you start`);
   if (m.vtDur) bits.push(`VT ${(m.vtDur / 1000).toFixed(1)}s`);
-  if (m.inc) bits.push(`next song at +${(m.rightMs / 1000).toFixed(1)}s`);
+  if (m.inc) bits.push(`next song at +${((m.inAtT - m.vtAtT) / 1000).toFixed(1)}s`);
   const post = introText(m.inc);
   $("introInfo").textContent = bits.join(" · ") + (post ? " · " + post : "");
 }
 
 function tlZoom(factor, anchorX) {
-  if (!cur || !cur.geo) return;
+  if (!cur) return;
+  if (cur.viewMs == null) drawTimeline();
   const cv = $("timeline"), W = cv.clientWidth, ax = anchorX == null ? W / 2 : anchorX;
-  const anchorMs = cur.panMs + (ax - TL.PADX) / cur.geo.pxPerMs;
-  cur.zoom = clamp((cur.zoom || 1) * factor, 1, 32);
-  const m = tlModel(), pxPerMs = ((W - 2 * TL.PADX) / m.total) * cur.zoom;
-  cur.panMs = anchorMs - (ax - TL.PADX) / pxPerMs;
+  const pxPerMs = (W - 2 * TL.PADX) / cur.viewMs;
+  const anchorT = cur.viewStartT + (ax - TL.PADX) / pxPerMs;
+  const m = tlModel();
+  cur.viewMs = clamp(cur.viewMs / factor, 500, Math.max(2000, m.total) * 4);
+  const px2 = (W - 2 * TL.PADX) / cur.viewMs;
+  cur.viewStartT = anchorT - (ax - TL.PADX) / px2;
   drawTimeline();
 }
 
@@ -698,33 +718,25 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
     if (!cur || !cur.geo) return;
     const { x, y } = tlXY(e);
     const t = tlHit(cur.geo.vtRect, x, y) ? "vt" : tlHit(cur.geo.outRect, x, y) ? "out" : tlHit(cur.geo.inRect, x, y) ? "in" : "pan";
-    tlDrag = { t, moved: false, startX: x, origUp: cur.upFileMs, origRight: cur.rightMs || 0, origPan: cur.panMs || 0,
-               outStart: cur.session.outgoing ? cur.session.outgoing.snippetStartMs : 0,
-               outDur: cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : 0,
-               vtDur: cur.vtBuf ? bufMs(cur.vtBuf) : 0, pxPerMs: cur.geo.pxPerMs };
+    tlDrag = { t, moved: false, startX: x, pxPerMs: cur.geo.pxPerMs,
+               origOut: cur.outAtT || 0, origVt: cur.vtAtT || 0, origIn: cur.inAtT || 0, origView: cur.viewStartT || 0 };
     cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing";
   });
   cv.addEventListener("pointermove", e => {
     if (!tlDrag) return;
     const x = tlXY(e).x, dxMs = (x - tlDrag.startX) / tlDrag.pxPerMs;
     if (Math.abs(x - tlDrag.startX) > 3) tlDrag.moved = true;
-    if (tlDrag.t === "vt" || tlDrag.t === "out") {
-      const origTvt = tlDrag.origUp - tlDrag.outStart;
-      cur.upFileMs = tlDrag.outStart + Math.round(clamp(origTvt + dxMs, 0, tlDrag.outDur)); updateReadout();
-    } else if (tlDrag.t === "in") {
-      const cap = tlDrag.vtDur > 0 ? tlDrag.vtDur : tlDrag.outDur;
-      cur.rightMs = Math.round(clamp(tlDrag.origRight + dxMs, 0, cap)); updateReadout();
-    } else if (tlDrag.moved) {
-      cur.panMs = tlDrag.origPan - dxMs;
-    }
+    if (tlDrag.t === "out") { cur.outAtT = Math.round(tlDrag.origOut + dxMs); updateReadout(); }
+    else if (tlDrag.t === "vt") { cur.vtAtT = Math.round(tlDrag.origVt + dxMs); updateReadout(); }
+    else if (tlDrag.t === "in") { cur.inAtT = Math.round(Math.max(cur.vtAtT || 0, tlDrag.origIn + dxMs)); updateReadout(); }
+    else if (tlDrag.moved) { cur.viewStartT = tlDrag.origView - dxMs; }
     drawTimeline();
   });
   const end = e => {
     if (!tlDrag) return;
-    if (tlDrag.t === "pan" && !tlDrag.moved && cur && cur.geo) {   // a click (no drag) on empty space/ruler → drop the playhead there
-      const ms = clamp(cur.panMs + (tlXY(e).x - TL.PADX) / cur.geo.pxPerMs, 0, cur.geo.total);
-      cur.playMs = ms;
-      if (cur.playing) previewFrom(ms); else drawTimeline();
+    if (tlDrag.t === "pan" && !tlDrag.moved && cur && cur.geo) {   // a click (no drag) → drop the playhead
+      cur.playMs = cur.viewStartT + (tlXY(e).x - TL.PADX) / cur.geo.pxPerMs;
+      if (cur.playing) previewFrom(cur.playMs); else drawTimeline();
     }
     tlDrag = null; cv.style.cursor = "grab";
   };
@@ -732,7 +744,7 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
   cv.addEventListener("pointercancel", end);
   $("tlIn").onclick = () => tlZoom(1.4);
   $("tlOut").onclick = () => tlZoom(1 / 1.4);
-  $("tlFit").onclick = () => { if (cur) { cur.zoom = 1; cur.panMs = 0; drawTimeline(); } };
+  $("tlFit").onclick = () => { if (cur) { const m = tlModel(); cur.viewStartT = m.tMin; cur.viewMs = m.total; drawTimeline(); } };
 })();
 window.addEventListener("resize", () => { if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); });
 
