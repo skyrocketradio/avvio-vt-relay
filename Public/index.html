@@ -89,6 +89,9 @@
       </label>
       <div class="meter big" title="Live input level"><i id="testMeter"></i></div>
       <p id="micHint" class="muted small">Talk — the bar should move.</p>
+      <label>Recording level <span id="micGainVal" class="val"></span>
+        <input type="range" id="micGain" min="50" max="400" value="100" />
+      </label>
       <label id="outRow" class="hidden">Speakers (output)
         <select id="outDevice"></select>
       </label>

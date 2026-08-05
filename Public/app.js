@@ -11,7 +11,8 @@ let previewNodes = [];
 let hourChips = {}, hourObserver = null;
 let inDeviceId = localStorage.getItem("vt_in") || "";
 let outDeviceId = localStorage.getItem("vt_out") || "";
-let meterStream = null, meterRAF = 0;
+let meterStream = null, meterRAF = 0, meterGainNode = null;
+let micGain = Number(localStorage.getItem("vt_micgain")) || 1;   // software boost applied to the recorded voice
 
 // ---------- API ----------
 async function api(path, opts = {}) {
@@ -334,6 +335,7 @@ async function startRecording() {
   try {
     const stream = await getMicStream();
     const src = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain(); gain.gain.value = micGain;   // software recording-level boost
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     const mute = ctx.createGain(); mute.gain.value = 0;
     const chunks = [];
@@ -343,8 +345,8 @@ async function startRecording() {
       let peak = 0; for (let i = 0; i < d.length; i += 16) { const v = Math.abs(d[i]); if (v > peak) peak = v; }
       const mf = $("meterFill"); if (mf) mf.style.width = Math.min(100, Math.round(peak * 140)) + "%";
     };
-    src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
-    cur.recChunks = chunks; cur.recProc = proc; cur.recStream = stream; cur.recMute = mute; cur.recSrc = src;
+    src.connect(gain); gain.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+    cur.recChunks = chunks; cur.recProc = proc; cur.recStream = stream; cur.recMute = mute; cur.recSrc = src; cur.recGain = gain;
     cur.recStart = ctx.currentTime;
     cur.vtBuf = null; cur.wavBlob = null;
     setPhase("recording"); $("submitBtn").disabled = true; $("editorMsg").textContent = ""; drawTimeline();
@@ -414,7 +416,7 @@ function markNext() {
 function stopRecording() {
   if (!cur || (cur.phase !== "recording" && cur.phase !== "recordingNext")) return;
   const ms = Math.round((ctx.currentTime - cur.recStart) * 1000);
-  if (cur.recProc) { cur.recProc.disconnect(); cur.recSrc.disconnect(); cur.recMute.disconnect(); }
+  if (cur.recProc) { cur.recProc.disconnect(); cur.recSrc.disconnect(); cur.recMute.disconnect(); if (cur.recGain) cur.recGain.disconnect(); }
   if (cur.recStream) cur.recStream.getTracks().forEach(t => t.stop());
   stopAudioSources();
   if ((cur.inAtT || 0) <= (cur.vtAtT || 0)) cur.inAtT = (cur.vtAtT || 0) + ms;   // never marked → next fires at end
@@ -505,6 +507,13 @@ $("testSpk").onclick = playTestTone;
 $("micRetry").onclick = () => setupDevices(true);
 $("inDevice").onchange = () => { inDeviceId = $("inDevice").value; localStorage.setItem("vt_in", inDeviceId); startMeter(); };
 $("outDevice").onchange = () => { outDeviceId = $("outDevice").value; localStorage.setItem("vt_out", outDeviceId); applyOutput(); };
+$("micGain").oninput = () => {
+  micGain = Number($("micGain").value) / 100;
+  $("micGainVal").textContent = Math.round(micGain * 100) + "%";
+  localStorage.setItem("vt_micgain", micGain);
+  if (meterGainNode) meterGainNode.gain.value = micGain;      // live-update the test meter
+  if (cur && cur.recGain) cur.recGain.gain.value = micGain;   // and an in-progress recording
+};
 document.addEventListener("keydown", e => {
   if ($("editorHost").classList.contains("hidden")) return;
   const tag = (e.target && e.target.tagName) || "";
@@ -522,6 +531,7 @@ document.addEventListener("keydown", e => {
 async function openAudio() {
   const dv = cur ? cur.duck : (Number(localStorage.getItem("vt_duck")) || 30);
   $("duckRange").value = dv; $("duckVal").textContent = dv + "%";
+  $("micGain").value = Math.round(micGain * 100); $("micGainVal").textContent = Math.round(micGain * 100) + "%";
   $("audioModal").classList.remove("hidden"); await setupDevices(true);
 }
 function closeAudio() { stopMeter(); $("audioModal").classList.add("hidden"); }
@@ -564,7 +574,8 @@ async function startMeter() {
   try { meterStream = await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId }, ...raw } : raw }); }
   catch (err) { $("audioMsg").textContent = micErrorText(err); return; }
   const src = ctx.createMediaStreamSource(meterStream);
-  const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(an);
+  meterGainNode = ctx.createGain(); meterGainNode.gain.value = micGain;
+  const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(meterGainNode); meterGainNode.connect(an);
   const buf = new Uint8Array(an.fftSize);
   const tick = () => {
     an.getByteTimeDomainData(buf);
@@ -578,6 +589,7 @@ async function startMeter() {
 function stopMeter() {
   if (meterRAF) { cancelAnimationFrame(meterRAF); meterRAF = 0; }
   if (meterStream) { meterStream.getTracks().forEach(t => t.stop()); meterStream = null; }
+  meterGainNode = null;
   const m = $("testMeter"); if (m) m.style.width = "0";
 }
 async function applyOutput() {
