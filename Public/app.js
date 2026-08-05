@@ -209,10 +209,17 @@ async function openSlot(slotId) {
       duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
       outAtT: 0,
-      vtAtT: session.outgoing ? Math.max(0, Math.round(session.outgoing.snippetDurationMs - 12000)) : 0,   // ~12s of outro under the talk by default; drag left to talk over more
-      inAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
+      vtAtT: session.outgoing ? Math.max(0, Math.round(session.outgoing.snippetDurationMs - 3500)) : 0,   // talk over the last ~3.5s of the outro by default
+      inAtT: session.outgoing ? session.outgoing.snippetDurationMs : 0,                                   // next song lands at the outro's end (segue)
       viewStartT: null, viewMs: null, playMs: null, playRAF: 0, playing: false, geo: null,
     };
+    if (session.outgoing) {   // open zoomed to the transition tail, not the whole outro (zoom out / drag to hear more)
+      const outEnd = session.outgoing.snippetDurationMs;
+      const introOff = (session.incoming && session.incoming.cues && session.incoming.cues.introEndMs != null)
+        ? Math.max(0, session.incoming.cues.introEndMs - session.incoming.snippetStartMs) : 8000;
+      cur.viewStartT = Math.max(0, outEnd - 4000);
+      cur.viewMs = Math.max(12000, (cur.inAtT + introOff + 4000) - cur.viewStartT);
+    }
     window._cur = cur; window._ctx = ctx;
     $("editorLabel").textContent = session.label;
     $("outTitle").textContent = ctxLabel(session.outgoing);
@@ -346,7 +353,7 @@ function stopRecording() {
 }
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
-function defaultStartMs() { const m = tlModel(); return m.out ? m.outStartT : m.tMin; }   // play from the outro's far-left start
+function defaultStartMs() { const m = tlModel(); return m.out ? Math.max(m.outStartT, m.outEndT - 4000) : m.tMin; }   // play the last ~4s of outro into the transition
 function togglePlay() { if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
 
 // Play the composite from an arbitrary timeline position, ducking the beds under the
@@ -643,11 +650,11 @@ function drawTimeline() {
   if (m.out) {
     const ox = xOf(m.outStartT), ow = m.outDur * pxPerMs;
     drawBlock(g, ox, yOut, ow, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
-    if (m.vtDur > 0) {                                            // shade the overlap only once a VT is recorded
+    if (m.vtDur > 0) {                                            // the talk-up line + overlap appear only once a VT is recorded
       const oL = xOf(clamp(m.vtStartT, m.outStartT, m.outEndT)), oR = xOf(clamp(m.vtEndT, m.outStartT, m.outEndT));
       g.fillStyle = "rgba(226,59,59,.16)"; g.fillRect(oL, yOut, Math.max(0, oR - oL), TL.LANE_H);
+      vline(g, xOf(m.upT), yOut, TL.LANE_H, "#e23b3b");
     }
-    vline(g, xOf(m.upT), yOut, TL.LANE_H, "#e23b3b");
     outRect = { x: ox, y: yOut, w: ow, h: TL.LANE_H };
   }
   let vtRect = null;
