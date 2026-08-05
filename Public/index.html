@@ -42,9 +42,9 @@
     <p id="emptyLog" class="muted hidden">No log for this day yet.</p>
   </section>
 
-  <!-- Editor -->
-  <section id="editorView" class="view hidden">
-    <button id="back" class="ghost back">‹ Back to log</button>
+  <!-- Editor (moved inline under the active VT row) -->
+  <div id="editorHost" class="editorhost hidden">
+    <button id="back" class="ghost back">‹ Close</button>
     <h1 id="editorLabel">Voice track</h1>
 
     <div class="tllegend">
@@ -60,7 +60,7 @@
     <div class="tlwrap"><canvas id="timeline" class="timeline"></canvas></div>
     <div class="meter" title="Microphone level"><i id="meterFill"></i></div>
     <div id="introInfo" class="muted small"></div>
-    <p class="muted small">Drag the green <b>VT</b> block to set where you talk over the outro; drag the <b>incoming song</b> to set where it starts. Scroll to zoom (or use −/+), drag empty space to pan.</p>
+    <p class="muted small">Drag the green <b>VT</b> block to set where you talk over the outro; drag the <b>incoming song</b> to set where it starts. Click the timeline to place the <b>playhead</b>, then press <b>space</b> to play/stop from there. Scroll to zoom (or −/+); drag empty space to pan.</p>
 
     <p id="phaseHint" class="muted hint">Press ← to hear the outro, ↑ to start recording.</p>
 
@@ -84,7 +84,7 @@
       </div>
       <p id="editorMsg" class="muted"></p>
     </div>
-  </section>
+  </div>
 
   <!-- Audio setup -->
   <div id="audioModal" class="modal hidden">

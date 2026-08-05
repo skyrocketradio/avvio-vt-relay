@@ -25,7 +25,7 @@ async function api(path, opts = {}) {
 function ensureCtx() { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); applyOutput(); } if (ctx.state === "suspended") ctx.resume(); return ctx; }
 
 // ---------- Views ----------
-function show(view) { for (const v of ["loginView", "logView", "editorView"]) $(v).classList.toggle("hidden", v !== view); }
+function show(view) { for (const v of ["loginView", "logView"]) $(v).classList.toggle("hidden", v !== view); }
 function logout() { token = null; sessionStorage.clear(); $("whoami").classList.add("hidden"); show("loginView"); }
 
 $("loginForm").onsubmit = async e => {
@@ -42,9 +42,9 @@ $("loginForm").onsubmit = async e => {
   } catch (err) { $("loginError").textContent = err.message; $("loginError").classList.remove("hidden"); }
 };
 $("logout").onclick = logout;
-$("refresh").onclick = () => loadLog(currentDate);
-$("back").onclick = () => { const s = cur && cur.slotId; stopEverything(); show("logView"); loadLog(currentDate, s); };
-$("datePicker").onchange = () => { currentDate = $("datePicker").value; loadLog(currentDate); };
+$("refresh").onclick = () => { closeEditor(); loadLog(currentDate); };
+$("back").onclick = closeEditor;
+$("datePicker").onchange = () => { closeEditor(); currentDate = $("datePicker").value; loadLog(currentDate); };
 
 async function afterLogin() {
   $("displayName").textContent = me.displayName;
@@ -187,7 +187,16 @@ function row(e, now) {
 }
 
 // ---------- Editor ----------
+// Collapse the inline editor and park its node back on <body> so a log re-render
+// (which clears #log) never destroys the canvas + its event wiring.
+function closeEditor() {
+  stopEverything();
+  const h = $("editorHost");
+  if (h) { h.classList.add("hidden"); document.body.appendChild(h); }
+  cur = null;
+}
 async function openSlot(slotId) {
+  if (cur) closeEditor();
   ensureCtx();
   try {
     const session = await (await api("/v1/me/slots/" + encodeURIComponent(slotId))).json();
@@ -208,9 +217,12 @@ async function openSlot(slotId) {
     $("introInfo").textContent = introText(session.incoming);
     $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%";
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
+    const host = $("editorHost");
+    const row = $("log").querySelector(`.row[data-slot="${slotId}"]`);
+    if (row) row.after(host); else $("log").appendChild(host);
+    host.classList.remove("hidden");
     setPhase("idle");
-    show("editorView");
-    requestAnimationFrame(() => { drawTimeline(); updateReadout(); });
+    requestAnimationFrame(() => { drawTimeline(); updateReadout(); host.scrollIntoView({ block: "center", behavior: "smooth" }); });
   } catch (err) { alert(err.message); }
 }
 
@@ -336,45 +348,52 @@ function stopRecording() {
   drawTimeline(); updateReadout();
 }
 
-// space — preview the composite as it will air, with a playhead sweeping the timeline
-function previewComposite() {
-  if (!cur || !cur.vtBuf) return;
-  stopPreview();
+// space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
+function defaultStartMs() { const m = tlModel(); return Math.max(0, m.Tvt - Math.min(m.Tvt, (cur.session.leadMs || 7000))); }
+function togglePlay() { if (!cur) return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
+
+// Play the composite from an arbitrary composite-ms, ducking the beds under the VT,
+// and sweep a playhead. Elements already underway at `fromMs` start mid-buffer.
+function previewFrom(fromMs) {
+  if (!cur) return;
+  stopSources();
   ensureCtx(); applyOutput();
   const m = tlModel(), duck = cur.duck / 100;
-  const lead = Math.min(m.Tvt, (cur.session.leadMs || 7000));   // ms of outro run-up before the talk
-  const startMs = Math.max(0, m.Tvt - lead);
-  const t0 = ctx.currentTime + 0.12;
-  const rt = ms => t0 + (ms - startMs) / 1000;                  // composite-ms → realtime
-  if (cur.outBuf) {
-    const g = ctx.createGain(), src = ctx.createBufferSource(); src.buffer = cur.outBuf; src.connect(g); g.connect(ctx.destination);
-    g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, rt(m.Tvt)); g.gain.linearRampToValueAtTime(duck, rt(m.Tvt) + 0.4);
-    src.start(t0, startMs / 1000); previewNodes.push(src, g);
+  const from = clamp(fromMs == null ? 0 : fromMs, 0, m.total);
+  const t0 = ctx.currentTime + 0.1;
+  const rt = ms => t0 + (ms - from) / 1000;
+  const vtEnd = m.Tvt + m.vtDur;
+  if (cur.outBuf && m.outDur > from) {                                    // outro [0, outDur]
+    const g = ctx.createGain(), s = ctx.createBufferSource(); s.buffer = cur.outBuf; s.connect(g); g.connect(ctx.destination);
+    if (from < m.Tvt) { g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, rt(m.Tvt)); g.gain.linearRampToValueAtTime(duck, rt(m.Tvt) + 0.4); }
+    else g.gain.setValueAtTime(duck, t0);
+    s.start(t0, from / 1000); previewNodes.push(s, g);
   }
-  { const src = ctx.createBufferSource(); src.buffer = cur.vtBuf; src.connect(ctx.destination); src.start(rt(m.Tvt)); previewNodes.push(src); }
-  if (cur.inBuf) {
-    const inAt = rt(m.Tin), vtEnd = rt(m.Tvt + m.vtDur);
-    const g = ctx.createGain(), src = ctx.createBufferSource(); src.buffer = cur.inBuf; src.connect(g); g.connect(ctx.destination);
-    g.gain.setValueAtTime(duck, inAt); g.gain.linearRampToValueAtTime(1, Math.max(inAt + 0.3, vtEnd + 0.4));
-    src.start(inAt); previewNodes.push(src, g);
+  if (cur.vtBuf && vtEnd > from) {                                        // VT [Tvt, vtEnd]
+    const s = ctx.createBufferSource(); s.buffer = cur.vtBuf; s.connect(ctx.destination);
+    if (from <= m.Tvt) s.start(rt(m.Tvt)); else s.start(t0, (from - m.Tvt) / 1000);
+    previewNodes.push(s);
+  }
+  if (cur.inBuf && (m.Tin + m.inDur) > from) {                            // incoming [Tin, Tin+inDur]
+    const g = ctx.createGain(), s = ctx.createBufferSource(); s.buffer = cur.inBuf; s.connect(g); g.connect(ctx.destination);
+    const startAt = from <= m.Tin ? rt(m.Tin) : t0, offset = from <= m.Tin ? 0 : (from - m.Tin) / 1000;
+    if (from < vtEnd) { g.gain.setValueAtTime(duck, Math.max(t0, startAt)); g.gain.setValueAtTime(duck, rt(vtEnd)); g.gain.linearRampToValueAtTime(1, rt(vtEnd) + 0.4); }
+    else g.gain.setValueAtTime(1, Math.max(t0, startAt));
+    s.start(startAt, offset); previewNodes.push(s, g);
   }
   cur.playing = true; $("stopBtn").disabled = false;
   const step = () => {
     if (!cur || !cur.playing) return;
-    cur.playMs = startMs + (ctx.currentTime - t0) * 1000;
+    cur.playMs = from + (ctx.currentTime - t0) * 1000;
     drawTimeline();
     if (cur.playMs < m.total + 300) cur.playRAF = requestAnimationFrame(step); else stopPreview();
   };
   cur.playRAF = requestAnimationFrame(step);
 }
 
-function stopPreview() {
-  for (const n of previewNodes) { try { n.stop && n.stop(); n.disconnect && n.disconnect(); } catch (e) {} }
-  previewNodes = [];
-  if (cur) { cur.playing = false; if (cur.playRAF) cancelAnimationFrame(cur.playRAF); cur.playRAF = 0; cur.playMs = null; }
-  $("stopBtn").disabled = true;
-  if (cur && !$("editorView").classList.contains("hidden")) drawTimeline();
-}
+function stopSources() { for (const n of previewNodes) { try { n.stop && n.stop(); n.disconnect && n.disconnect(); } catch (e) {} } previewNodes = []; }
+function pausePlay() { stopSources(); if (cur) { cur.playing = false; if (cur.playRAF) cancelAnimationFrame(cur.playRAF); cur.playRAF = 0; } $("stopBtn").disabled = true; if (cur) drawTimeline(); }   // keeps the playhead
+function stopPreview() { stopSources(); if (cur) { cur.playing = false; if (cur.playRAF) cancelAnimationFrame(cur.playRAF); cur.playRAF = 0; cur.playMs = null; } $("stopBtn").disabled = true; if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); }
 function stopAudioSources() { for (const n of [cur && cur.outSrc, cur && cur.inSrc]) { try { n && n.stop(); n && n.disconnect(); } catch (e) {} } if (cur) { cur.outSrc = cur.inSrc = null; } }
 function stopEverything() { stopPreview(); stopAudioSources(); if (cur && cur.recStream) { try { cur.recProc.disconnect(); cur.recStream.getTracks().forEach(t => t.stop()); } catch (e) {} } }
 
@@ -383,7 +402,7 @@ $("btnLeft").onclick = auditionOutro;
 $("btnUp").onclick = () => startRecording();
 $("btnRight").onclick = markNext;
 $("btnDown").onclick = stopRecording;
-$("btnSpace").onclick = previewComposite;
+$("btnSpace").onclick = togglePlay;
 $("stopBtn").onclick = stopPreview;
 $("duckRange").oninput = () => { cur.duck = Number($("duckRange").value); $("duckVal").textContent = cur.duck + "%"; };
 
@@ -395,13 +414,15 @@ $("micRetry").onclick = () => setupDevices(true);
 $("inDevice").onchange = () => { inDeviceId = $("inDevice").value; localStorage.setItem("vt_in", inDeviceId); startMeter(); };
 $("outDevice").onchange = () => { outDeviceId = $("outDevice").value; localStorage.setItem("vt_out", outDeviceId); applyOutput(); };
 document.addEventListener("keydown", e => {
-  if ($("editorView").classList.contains("hidden")) return;
+  if ($("editorHost").classList.contains("hidden")) return;
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   const k = e.key;
   if (k === "ArrowLeft") { auditionOutro(); e.preventDefault(); }
   else if (k === "ArrowUp") { startRecording(); e.preventDefault(); }
   else if (k === "ArrowRight") { markNext(); e.preventDefault(); }
   else if (k === "ArrowDown") { stopRecording(); e.preventDefault(); }
-  else if (k === " ") { previewComposite(); e.preventDefault(); }
+  else if (k === " ") { togglePlay(); e.preventDefault(); }
 });
 
 // ---------- Audio setup ----------
@@ -529,7 +550,7 @@ function peaksFromBuffer(buf, n = 400) {
   return out;
 }
 // ---------- Timeline (draggable, zoomable transition editor) ----------
-const TL = { TOP: 8, LANE_H: 52, GAP: 12, PADX: 10, RULER: 20 };
+const TL = { TOP: 8, LANE_H: 52, GAP: 12, PADX: 10, RULER: 20 };  // LANE_H/GAP/RULER recomputed per draw for mobile
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // The whole transition on one shared time axis (ms). t=0 = start of the outgoing snippet.
@@ -566,6 +587,8 @@ function drawBlock(g, x, y, w, h, peaks, wave, bg, border) {
 function drawTimeline() {
   const cv = $("timeline"); if (!cv || !cur) return;
   const W = cv.clientWidth; if (!W) { requestAnimationFrame(drawTimeline); return; }
+  const small = W < 540;
+  TL.LANE_H = small ? 38 : 52; TL.GAP = small ? 8 : 12; TL.RULER = small ? 16 : 20;
   const dpr = window.devicePixelRatio || 1;
   const H = TL.TOP + 3 * TL.LANE_H + 2 * TL.GAP + TL.RULER;
   cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
@@ -653,7 +676,7 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
     if (!cur || !cur.geo) return;
     const { x, y } = tlXY(e);
     const t = tlHit(cur.geo.vtRect, x, y) ? "vt" : tlHit(cur.geo.inRect, x, y) ? "in" : "pan";
-    tlDrag = { t, startX: x, origUp: cur.upFileMs, origRight: cur.rightMs || 0, origPan: cur.panMs || 0,
+    tlDrag = { t, moved: false, startX: x, origUp: cur.upFileMs, origRight: cur.rightMs || 0, origPan: cur.panMs || 0,
                outStart: cur.session.outgoing ? cur.session.outgoing.snippetStartMs : 0,
                outDur: cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : 0,
                vtDur: cur.vtBuf ? bufMs(cur.vtBuf) : 0, pxPerMs: cur.geo.pxPerMs };
@@ -661,26 +684,35 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
   });
   cv.addEventListener("pointermove", e => {
     if (!tlDrag) return;
-    const dxMs = (tlXY(e).x - tlDrag.startX) / tlDrag.pxPerMs;
+    const x = tlXY(e).x, dxMs = (x - tlDrag.startX) / tlDrag.pxPerMs;
+    if (Math.abs(x - tlDrag.startX) > 3) tlDrag.moved = true;
     if (tlDrag.t === "vt") {
       const origTvt = tlDrag.origUp - tlDrag.outStart;
       cur.upFileMs = tlDrag.outStart + Math.round(clamp(origTvt + dxMs, 0, tlDrag.outDur)); updateReadout();
     } else if (tlDrag.t === "in") {
       const cap = tlDrag.vtDur > 0 ? tlDrag.vtDur : tlDrag.outDur;
       cur.rightMs = Math.round(clamp(tlDrag.origRight + dxMs, 0, cap)); updateReadout();
-    } else {
+    } else if (tlDrag.moved) {
       cur.panMs = tlDrag.origPan - dxMs;
     }
     drawTimeline();
   });
-  const end = () => { if (tlDrag) { tlDrag = null; cv.style.cursor = "grab"; } };
+  const end = e => {
+    if (!tlDrag) return;
+    if (tlDrag.t === "pan" && !tlDrag.moved && cur && cur.geo) {   // a click (no drag) on empty space/ruler → drop the playhead there
+      const ms = clamp(cur.panMs + (tlXY(e).x - TL.PADX) / cur.geo.pxPerMs, 0, cur.geo.total);
+      cur.playMs = ms;
+      if (cur.playing) previewFrom(ms); else drawTimeline();
+    }
+    tlDrag = null; cv.style.cursor = "grab";
+  };
   cv.addEventListener("pointerup", end);
   cv.addEventListener("pointercancel", end);
   $("tlIn").onclick = () => tlZoom(1.4);
   $("tlOut").onclick = () => tlZoom(1 / 1.4);
   $("tlFit").onclick = () => { if (cur) { cur.zoom = 1; cur.panMs = 0; drawTimeline(); } };
 })();
-window.addEventListener("resize", () => { if (cur && !$("editorView").classList.contains("hidden")) drawTimeline(); });
+window.addEventListener("resize", () => { if (cur && !$("editorHost").classList.contains("hidden")) drawTimeline(); });
 
 // Boot
 if (token) { ensureCtx(); afterLogin(); } else { show("loginView"); }
