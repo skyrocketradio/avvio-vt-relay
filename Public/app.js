@@ -209,7 +209,7 @@ async function openSlot(slotId) {
       duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
       outAtT: 0,
-      vtAtT: 0,                                                                 // talk-up defaults to the outro's far-left; drag right as needed
+      vtAtT: session.outgoing ? Math.max(0, Math.round(session.outgoing.snippetDurationMs - 12000)) : 0,   // ~12s of outro under the talk by default; drag left to talk over more
       inAtT: session.outgoing ? Math.round(session.outgoing.snippetDurationMs * 0.7) : 0,
       viewStartT: null, viewMs: null, playMs: null, playRAF: 0, playing: false, geo: null,
     };
@@ -643,7 +643,10 @@ function drawTimeline() {
   if (m.out) {
     const ox = xOf(m.outStartT), ow = m.outDur * pxPerMs;
     drawBlock(g, ox, yOut, ow, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
-    g.fillStyle = "rgba(226,59,59,.12)"; g.fillRect(xOf(m.upT), yOut, (m.outEndT - m.upT) * pxPerMs, TL.LANE_H);
+    if (m.vtDur > 0) {                                            // shade the overlap only once a VT is recorded
+      const oL = xOf(clamp(m.vtStartT, m.outStartT, m.outEndT)), oR = xOf(clamp(m.vtEndT, m.outStartT, m.outEndT));
+      g.fillStyle = "rgba(226,59,59,.16)"; g.fillRect(oL, yOut, Math.max(0, oR - oL), TL.LANE_H);
+    }
     vline(g, xOf(m.upT), yOut, TL.LANE_H, "#e23b3b");
     outRect = { x: ox, y: yOut, w: ow, h: TL.LANE_H };
   }
