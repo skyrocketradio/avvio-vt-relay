@@ -13,7 +13,8 @@
     <div id="whoami" class="whoami hidden">
       <select id="datePicker" class="datepick"></select>
       <span id="displayName"></span>
-      <button id="audioBtn" class="ghost" title="Microphone & speaker setup">🎙 Audio</button>
+      <button id="infoBtn" class="ghost" title="How the editor works">ℹ Info</button>
+      <button id="audioBtn" class="ghost" title="Microphone, speaker & duck level">🎙 Audio</button>
       <button id="logout" class="ghost">Sign out</button>
     </div>
   </header>
@@ -60,9 +61,6 @@
     <div class="tlwrap"><canvas id="timeline" class="timeline"></canvas></div>
     <div class="meter" title="Microphone level"><i id="meterFill"></i></div>
     <div id="introInfo" class="muted small"></div>
-    <p class="muted small">Drag the green <b>VT</b> block to set where you talk over the outro; drag the <b>incoming song</b> to set where it starts. Click the timeline to place the <b>playhead</b>, then press <b>space</b> to play/stop from there. Scroll to zoom (or −/+); drag empty space to pan.</p>
-
-    <p id="phaseHint" class="muted hint">Press ← to hear the outro, ↑ to start recording.</p>
 
     <!-- On-screen equivalents of the console arrow keys -->
     <div class="pad">
@@ -74,10 +72,6 @@
     </div>
 
     <div class="cue">
-      <label>Duck the music to
-        <input type="range" id="duckRange" min="0" max="100" value="30" />
-        <span id="duckVal" class="val"></span>
-      </label>
       <div class="preview-row">
         <button id="submitBtn" class="submit" disabled>Send to station</button>
         <button id="stopBtn" class="ghost" disabled>■ Stop preview</button>
@@ -98,6 +92,9 @@
       <label id="outRow" class="hidden">Speakers (output)
         <select id="outDevice"></select>
       </label>
+      <label>Duck the music under your voice to <span id="duckVal" class="val"></span>
+        <input type="range" id="duckRange" min="0" max="100" value="30" />
+      </label>
       <div class="preview-row">
         <button id="testSpk" class="ghost">▶ Test speaker</button>
         <button id="micRetry" class="ghost">↻ Re-check devices</button>
@@ -112,6 +109,25 @@
           <li>Pick your <b>RODE</b> above — the browser may default to the built-in mic.</li>
         </ul>
       </details>
+    </div>
+  </div>
+
+  <!-- Editor help -->
+  <div id="infoModal" class="modal hidden">
+    <div class="sheet">
+      <div class="listhead"><h1>How the editor works</h1><button id="infoClose" class="primary">Done</button></div>
+      <ul class="help">
+        <li><b>← Outro</b> — audition the end of the song you're coming out of.</li>
+        <li><b>↑ Record</b> — start talking over the outro.</li>
+        <li><b>→ Next</b> — drop the next song in under you.</li>
+        <li><b>↓ Stop</b> — end the take.</li>
+        <li><b>Drag</b> the green <b>VT</b> or the <b>outro</b> to set where you talk; drag the <b>incoming song</b> to set where it starts.</li>
+        <li>The gold <b>POST</b> line is where the next song's vocal begins — talk up to it.</li>
+        <li><b>Click</b> the timeline to place the <b>playhead</b>. <b>Space</b> plays / stops from there.</li>
+        <li><b>Enter</b> twice sends the take to the station (first Enter confirms).</li>
+        <li><b>Scroll</b> to zoom (or −/+ / Fit); drag empty space to pan.</li>
+        <li>Set mic, speaker &amp; music <b>duck</b> level under <b>🎙 Audio</b>.</li>
+      </ul>
     </div>
   </div>
 

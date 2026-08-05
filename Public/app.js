@@ -190,6 +190,7 @@ function row(e, now) {
 // Collapse the inline editor and park its node back on <body> so a log re-render
 // (which clears #log) never destroys the canvas + its event wiring.
 function closeEditor() {
+  disarmSend();
   stopEverything();
   const h = $("editorHost");
   if (h) { h.classList.add("hidden"); document.body.appendChild(h); }
@@ -206,7 +207,7 @@ async function openSlot(slotId) {
       slotId, session, outBuf, inBuf, vtBuf: null, wavBlob: null,
       phase: "idle", recStart: 0, recChunks: null, recProc: null, recStream: null, recMute: null,
       upFileMs: session.outgoing ? session.outgoing.snippetStartMs + Math.floor((session.outgoing.snippetDurationMs) * 0.7) : 0,
-      rightMs: 0, duck: Math.round((session.duckGain ?? 0.35) * 100),
+      rightMs: 0, duck: Number(localStorage.getItem("vt_duck")) || Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
       zoom: 1, panMs: 0, playMs: null, playRAF: 0, playing: false, geo: null,
     };
@@ -233,14 +234,6 @@ async function fetchAudio(slotId, role) {
 
 function setPhase(p) {
   cur.phase = p;
-  const hints = {
-    idle: "Press ← to hear the outro, ↑ to start recording.",
-    audition: "Hearing the outro… press ↑ when you want to start talking.",
-    recording: "Recording — talk over the outro. Press → when the next song should start.",
-    recordingNext: "Next song is playing under you — press ↓ to stop.",
-    recorded: "Take ready. ▶ Preview, then Send — or ↑ to re-record.",
-  };
-  $("phaseHint").textContent = hints[p] || "";
   $("btnUp").textContent = (p === "recorded") ? "↑ Re-record" : "↑ Record";
 }
 
@@ -260,6 +253,7 @@ function auditionOutro() {
 // ↑ start recording (captures UP = current outro position)
 async function startRecording() {
   if (!cur) return;
+  disarmSend();
   stopPreview();
   ensureCtx();
   // Capture UP point from the outro's current playback position (if auditioning).
@@ -350,7 +344,7 @@ function stopRecording() {
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
 function defaultStartMs() { const m = tlModel(); return Math.max(0, m.Tvt - Math.min(m.Tvt, (cur.session.leadMs || 7000))); }
-function togglePlay() { if (!cur) return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
+function togglePlay() { if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
 
 // Play the composite from an arbitrary composite-ms, ducking the beds under the VT,
 // and sweep a playhead. Elements already underway at `fromMs` start mid-buffer.
@@ -404,9 +398,14 @@ $("btnRight").onclick = markNext;
 $("btnDown").onclick = stopRecording;
 $("btnSpace").onclick = togglePlay;
 $("stopBtn").onclick = stopPreview;
-$("duckRange").oninput = () => { cur.duck = Number($("duckRange").value); $("duckVal").textContent = cur.duck + "%"; };
+$("duckRange").oninput = () => {
+  const v = Number($("duckRange").value); $("duckVal").textContent = v + "%"; localStorage.setItem("vt_duck", v);
+  if (cur) { cur.duck = v; if (!$("editorHost").classList.contains("hidden")) drawTimeline(); }
+};
 
-// Audio setup (device pickers + live test)
+// Info + Audio setup
+$("infoBtn").onclick = () => $("infoModal").classList.remove("hidden");
+$("infoClose").onclick = () => $("infoModal").classList.add("hidden");
 $("audioBtn").onclick = openAudio;
 $("audioClose").onclick = closeAudio;
 $("testSpk").onclick = playTestTone;
@@ -418,15 +417,20 @@ document.addEventListener("keydown", e => {
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   const k = e.key;
-  if (k === "ArrowLeft") { auditionOutro(); e.preventDefault(); }
-  else if (k === "ArrowUp") { startRecording(); e.preventDefault(); }
+  if (k === "Enter") { confirmSend(); e.preventDefault(); return; }
+  if (k === "ArrowLeft") { disarmSend(); auditionOutro(); e.preventDefault(); }
+  else if (k === "ArrowUp") { disarmSend(); startRecording(); e.preventDefault(); }
   else if (k === "ArrowRight") { markNext(); e.preventDefault(); }
   else if (k === "ArrowDown") { stopRecording(); e.preventDefault(); }
-  else if (k === " ") { togglePlay(); e.preventDefault(); }
+  else if (k === " ") { disarmSend(); togglePlay(); e.preventDefault(); }
 });
 
 // ---------- Audio setup ----------
-async function openAudio() { $("audioModal").classList.remove("hidden"); await setupDevices(true); }
+async function openAudio() {
+  const dv = cur ? cur.duck : (Number(localStorage.getItem("vt_duck")) || 30);
+  $("duckRange").value = dv; $("duckVal").textContent = dv + "%";
+  $("audioModal").classList.remove("hidden"); await setupDevices(true);
+}
 function closeAudio() { stopMeter(); $("audioModal").classList.add("hidden"); }
 
 async function setupDevices(requestPermission) {
@@ -502,15 +506,29 @@ function micErrorText(err) {
 }
 function introText(el) {
   if (!el || !el.cues) return "";
-  const start = el.cues.startMs || 0;
-  const post = el.cues.introEndMs;
-  if (post == null || post <= start) return "No instrumental intro — the vocal is right at the top; keep it tight.";
-  return `Intro to the post: ${((post - start) / 1000).toFixed(1)}s — talk up to the yellow marker.`;
+  const start = el.cues.startMs || 0, post = el.cues.introEndMs;
+  if (post == null || post <= start) return "Intro: none (vocal at top)";
+  return `Intro to post: ${((post - start) / 1000).toFixed(1)}s`;
 }
 
-// ---------- Submit ----------
-$("submitBtn").onclick = async () => {
+// ---------- Submit (Enter-twice / click-to-confirm, for fast keyboard sends) ----------
+let sendArmed = false, sendArmTimer = 0;
+function disarmSend() {
+  sendArmed = false; if (sendArmTimer) { clearTimeout(sendArmTimer); sendArmTimer = 0; }
+  const b = $("submitBtn"); if (b && !b.disabled) { b.textContent = "Send to station"; b.classList.remove("armed"); }
+}
+function armSend() {
+  if (!cur || !cur.wavBlob) { $("editorMsg").textContent = "Record a take first (↑ then ↓)."; return; }
+  sendArmed = true;
+  $("submitBtn").textContent = "Press Enter again to send ✓"; $("submitBtn").classList.add("armed");
+  $("editorMsg").textContent = "Confirm: press Enter again (or click) to send.";
+  if (sendArmTimer) clearTimeout(sendArmTimer);
+  sendArmTimer = setTimeout(disarmSend, 6000);
+}
+function confirmSend() { if (!cur || !cur.wavBlob) return armSend(); if (sendArmed) doSend(); else armSend(); }
+async function doSend() {
   if (!cur || !cur.wavBlob) return;
+  disarmSend();
   $("submitBtn").disabled = true; $("editorMsg").textContent = "Sending…";
   const result = {
     version: 1, fingerprint: cur.session.fingerprint,
@@ -525,9 +543,10 @@ $("submitBtn").onclick = async () => {
   try {
     await api(`/v1/me/slots/${encodeURIComponent(cur.slotId)}/result`, { method: "POST", body: fd });
     $("editorMsg").textContent = "Sent! It will import at the station.";
-    setTimeout(() => { show("logView"); loadLog(currentDate); }, 900);
+    setTimeout(() => { const d = currentDate; closeEditor(); loadLog(d); }, 900);
   } catch (err) { $("editorMsg").textContent = "Failed: " + err.message; $("submitBtn").disabled = false; }
-};
+}
+$("submitBtn").onclick = confirmSend;
 
 // ---------- Helpers ----------
 function ctxLabel(el) { return el ? (el.artist ? `${el.title} — ${el.artist}` : el.title) : "—"; }
@@ -604,10 +623,13 @@ function drawTimeline() {
 
   for (const y of [yOut, yVt, yIn]) { g.fillStyle = "#0e1216"; roundRect(g, TL.PADX, y, innerW, TL.LANE_H, 6); g.fill(); }
 
+  let outRect = null;
   if (m.out) {
-    drawBlock(g, xOf(0), yOut, m.outDur * pxPerMs, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
+    const ox = xOf(0), ow = m.outDur * pxPerMs;
+    drawBlock(g, ox, yOut, ow, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
     g.fillStyle = "rgba(226,59,59,.12)"; g.fillRect(xOf(m.Tvt), yOut, (m.outDur - m.Tvt) * pxPerMs, TL.LANE_H);
     vline(g, xOf(m.Tvt), yOut, TL.LANE_H, "#e23b3b");
+    outRect = { x: ox, y: yOut, w: ow, h: TL.LANE_H };
   }
   let vtRect = null;
   if (m.vtDur > 0) {
@@ -642,7 +664,7 @@ function drawTimeline() {
   if (cur.playMs != null && cur.playMs >= cur.panMs && cur.playMs <= cur.panMs + visibleMs)
     vline(g, xOf(cur.playMs), TL.TOP, 3 * TL.LANE_H + 2 * TL.GAP, "#ffffff");
 
-  cur.geo = { vtRect, inRect, pxPerMs, visibleMs, total: m.total };
+  cur.geo = { outRect, vtRect, inRect, pxPerMs, visibleMs, total: m.total };
 }
 
 function updateReadout() {
@@ -675,7 +697,7 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
   cv.addEventListener("pointerdown", e => {
     if (!cur || !cur.geo) return;
     const { x, y } = tlXY(e);
-    const t = tlHit(cur.geo.vtRect, x, y) ? "vt" : tlHit(cur.geo.inRect, x, y) ? "in" : "pan";
+    const t = tlHit(cur.geo.vtRect, x, y) ? "vt" : tlHit(cur.geo.outRect, x, y) ? "out" : tlHit(cur.geo.inRect, x, y) ? "in" : "pan";
     tlDrag = { t, moved: false, startX: x, origUp: cur.upFileMs, origRight: cur.rightMs || 0, origPan: cur.panMs || 0,
                outStart: cur.session.outgoing ? cur.session.outgoing.snippetStartMs : 0,
                outDur: cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : 0,
@@ -686,7 +708,7 @@ function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rec
     if (!tlDrag) return;
     const x = tlXY(e).x, dxMs = (x - tlDrag.startX) / tlDrag.pxPerMs;
     if (Math.abs(x - tlDrag.startX) > 3) tlDrag.moved = true;
-    if (tlDrag.t === "vt") {
+    if (tlDrag.t === "vt" || tlDrag.t === "out") {
       const origTvt = tlDrag.origUp - tlDrag.outStart;
       cur.upFileMs = tlDrag.outStart + Math.round(clamp(origTvt + dxMs, 0, tlDrag.outDur)); updateReadout();
     } else if (tlDrag.t === "in") {
