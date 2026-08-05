@@ -217,7 +217,7 @@ async function openSlot(slotId) {
       const outEnd = session.outgoing.snippetDurationMs;
       const introOff = (session.incoming && session.incoming.cues && session.incoming.cues.introEndMs != null)
         ? Math.max(0, session.incoming.cues.introEndMs - session.incoming.snippetStartMs) : 8000;
-      cur.viewStartT = Math.max(0, outEnd - 4000);
+      cur.viewStartT = Math.max(0, outEnd - 6000);
       cur.viewMs = Math.max(12000, (cur.inAtT + introOff + 4000) - cur.viewStartT);
     }
     window._cur = cur; window._ctx = ctx;
@@ -251,7 +251,7 @@ function auditionOutro() {
   stopAudioSources();
   const c = ctx, dur = cur.outBuf.duration, outAt = cur.outAtT || 0;
   const outDur = cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : dur * 1000;
-  const startT = (cur.viewStartT != null) ? cur.viewStartT : (outAt + outDur - 4000);
+  const startT = (cur.viewStartT != null) ? cur.viewStartT : (outAt + outDur - 6000);
   const offset = clamp((startT - outAt) / 1000, 0, dur);
   const g = c.createGain(); const s = c.createBufferSource();
   s.buffer = cur.outBuf; s.connect(g); g.connect(c.destination);
@@ -335,7 +335,7 @@ function resetTake() {
     cur.inAtT = out.snippetDurationMs;
     const introOff = (s.incoming && s.incoming.cues && s.incoming.cues.introEndMs != null)
       ? Math.max(0, s.incoming.cues.introEndMs - s.incoming.snippetStartMs) : 8000;
-    cur.viewStartT = Math.max(0, out.snippetDurationMs - 4000);
+    cur.viewStartT = Math.max(0, out.snippetDurationMs - 6000);
     cur.viewMs = Math.max(12000, (cur.inAtT + introOff + 4000) - cur.viewStartT);
   } else { cur.vtAtT = 0; cur.inAtT = 0; cur.viewStartT = null; cur.viewMs = null; }
   const mf = $("meterFill"); if (mf) mf.style.width = "0";
@@ -378,7 +378,7 @@ function stopRecording() {
 }
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
-function defaultStartMs() { const m = tlModel(); return m.out ? Math.max(m.outStartT, m.outEndT - 4000) : m.tMin; }   // play the last ~4s of outro into the transition
+function defaultStartMs() { const m = tlModel(); return m.out ? Math.max(m.outStartT, m.outEndT - 6000) : m.tMin; }   // play the last ~6s of outro into the transition
 function togglePlay() {
   if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return;
   if (cur.playing) { pausePlay(); return; }
