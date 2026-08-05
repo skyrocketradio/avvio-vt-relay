@@ -346,7 +346,7 @@ function stopRecording() {
 }
 
 // space / ▶ — play or stop from the playhead (or a sensible run-up if unset)
-function defaultStartMs() { const m = tlModel(); return Math.max(m.tMin, m.vtStartT - (cur.session.leadMs || 7000)); }
+function defaultStartMs() { const m = tlModel(); return m.out ? m.outStartT : m.tMin; }   // play from the outro's far-left start
 function togglePlay() { if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return; if (cur.playing) pausePlay(); else previewFrom(cur.playMs != null ? cur.playMs : defaultStartMs()); }
 
 // Play the composite from an arbitrary timeline position, ducking the beds under the
