@@ -13,6 +13,7 @@
     <div id="whoami" class="whoami hidden">
       <select id="datePicker" class="datepick"></select>
       <span id="displayName"></span>
+      <button id="audioBtn" class="ghost" title="Microphone & speaker setup">🎙 Audio</button>
       <button id="logout" class="ghost">Sign out</button>
     </div>
   </header>
@@ -59,6 +60,7 @@
       <div class="lane">
         <div class="lane-title">Going into <b id="inTitle">—</b></div>
         <canvas class="wave" id="inWave" height="70"></canvas>
+        <div id="introInfo" class="muted small"></div>
       </div>
     </div>
 
@@ -85,6 +87,35 @@
       <p id="editorMsg" class="muted"></p>
     </div>
   </section>
+
+  <!-- Audio setup -->
+  <div id="audioModal" class="modal hidden">
+    <div class="sheet">
+      <div class="listhead"><h1>Audio setup</h1><button id="audioClose" class="primary">Done</button></div>
+      <label>Microphone (input)
+        <select id="inDevice"></select>
+      </label>
+      <div class="meter big" title="Live input level"><i id="testMeter"></i></div>
+      <p id="micHint" class="muted small">Talk — the bar should move.</p>
+      <label id="outRow" class="hidden">Speakers (output)
+        <select id="outDevice"></select>
+      </label>
+      <div class="preview-row">
+        <button id="testSpk" class="ghost">▶ Test speaker</button>
+        <button id="micRetry" class="ghost">↻ Re-check devices</button>
+      </div>
+      <p id="audioMsg" class="error small"></p>
+      <details class="tips">
+        <summary class="muted small">Mic not detected?</summary>
+        <ul class="muted small">
+          <li>Open the site in <b>Safari</b> or <b>Chrome</b> directly — not an embedded/in-app browser.</li>
+          <li>macOS <b>System Settings → Privacy &amp; Security → Microphone</b> — enable your browser, then re-check.</li>
+          <li>When the browser asks to use the mic, choose <b>Allow</b>. If blocked, click the site-info icon in the address bar and re-allow.</li>
+          <li>Pick your <b>RODE</b> above — the browser may default to the built-in mic.</li>
+        </ul>
+      </details>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

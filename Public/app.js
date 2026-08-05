@@ -9,6 +9,9 @@ let dates = [], currentDate = null, logRows = [];
 let cur = null;           // editor working state
 let previewNodes = [];
 let hourChips = {}, hourObserver = null;
+let inDeviceId = localStorage.getItem("vt_in") || "";
+let outDeviceId = localStorage.getItem("vt_out") || "";
+let meterStream = null, meterRAF = 0;
 
 // ---------- API ----------
 async function api(path, opts = {}) {
@@ -19,7 +22,7 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error((await res.text()) || ("Error " + res.status));
   return res;
 }
-function ensureCtx() { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === "suspended") ctx.resume(); return ctx; }
+function ensureCtx() { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); applyOutput(); } if (ctx.state === "suspended") ctx.resume(); return ctx; }
 
 // ---------- Views ----------
 function show(view) { for (const v of ["loginView", "logView", "editorView"]) $(v).classList.toggle("hidden", v !== view); }
@@ -201,6 +204,7 @@ async function openSlot(slotId) {
     $("editorLabel").textContent = session.label;
     $("outTitle").textContent = ctxLabel(session.outgoing);
     $("inTitle").textContent = ctxLabel(session.incoming);
+    $("introInfo").textContent = introText(session.incoming);
     $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%";
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
     setPhase("idle");
@@ -258,7 +262,7 @@ async function startRecording() {
     return micFail("This browser can't reach a microphone here. Use Safari or Chrome and open the site over https://.");
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const stream = await getMicStream();
     const src = ctx.createMediaStreamSource(stream);
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     const mute = ctx.createGain(); mute.gain.value = 0;
@@ -281,7 +285,22 @@ async function startRecording() {
     else micFail("Microphone error: " + (err && err.message ? err.message : err));
   }
 }
-function micFail(msg) { setPhase("idle"); const mf = $("meterFill"); if (mf) mf.style.width = "0"; $("editorMsg").textContent = msg; alert(msg); }
+function micFail(msg) { setPhase("idle"); const mf = $("meterFill"); if (mf) mf.style.width = "0"; $("editorMsg").textContent = msg; openAudio(); }
+
+// Acquire the mic, honoring the chosen input device; fall back to default if that
+// device vanished (unplugged RODE) so recording still works.
+async function getMicStream() {
+  const base = { echoCancellation: true, noiseSuppression: true };
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId }, ...base } : base });
+  } catch (err) {
+    if (err && err.name === "OverconstrainedError" && inDeviceId) {
+      inDeviceId = ""; localStorage.removeItem("vt_in");
+      return await navigator.mediaDevices.getUserMedia({ audio: base });
+    }
+    throw err;
+  }
+}
 
 // → mark where the next song starts (fires the incoming intro)
 function markNext() {
@@ -352,6 +371,14 @@ $("btnDown").onclick = stopRecording;
 $("btnSpace").onclick = previewComposite;
 $("stopBtn").onclick = stopPreview;
 $("duckRange").oninput = () => { cur.duck = Number($("duckRange").value); $("duckVal").textContent = cur.duck + "%"; };
+
+// Audio setup (device pickers + live test)
+$("audioBtn").onclick = openAudio;
+$("audioClose").onclick = closeAudio;
+$("testSpk").onclick = playTestTone;
+$("micRetry").onclick = () => setupDevices(true);
+$("inDevice").onchange = () => { inDeviceId = $("inDevice").value; localStorage.setItem("vt_in", inDeviceId); startMeter(); };
+$("outDevice").onchange = () => { outDeviceId = $("outDevice").value; localStorage.setItem("vt_out", outDeviceId); applyOutput(); };
 document.addEventListener("keydown", e => {
   if ($("editorView").classList.contains("hidden")) return;
   const k = e.key;
@@ -361,6 +388,89 @@ document.addEventListener("keydown", e => {
   else if (k === "ArrowDown") { stopRecording(); e.preventDefault(); }
   else if (k === " ") { previewComposite(); e.preventDefault(); }
 });
+
+// ---------- Audio setup ----------
+async function openAudio() { $("audioModal").classList.remove("hidden"); await setupDevices(true); }
+function closeAudio() { stopMeter(); $("audioModal").classList.add("hidden"); }
+
+async function setupDevices(requestPermission) {
+  $("audioMsg").textContent = "";
+  ensureCtx();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $("audioMsg").textContent = "This browser can't access audio devices here. Open the site in Safari or Chrome directly.";
+    return;
+  }
+  if (requestPermission) {
+    try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); }
+    catch (err) { $("audioMsg").textContent = micErrorText(err); return; }
+  }
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) {}
+  const ins = devices.filter(d => d.kind === "audioinput");
+  const outs = devices.filter(d => d.kind === "audiooutput");
+  fillSelect($("inDevice"), ins, inDeviceId, "Microphone");
+  if (!inDeviceId && ins[0]) inDeviceId = ins[0].deviceId;
+  const canSink = ctx && typeof ctx.setSinkId === "function";
+  $("outRow").classList.toggle("hidden", !(canSink && outs.length));
+  if (canSink && outs.length) { fillSelect($("outDevice"), outs, outDeviceId, "Speakers"); applyOutput(); }
+  if (!ins.length) { $("audioMsg").textContent = "No microphone detected. Enable your browser in macOS System Settings → Privacy & Security → Microphone, then Re-check."; return; }
+  startMeter();
+}
+function fillSelect(sel, devices, chosen, fallback) {
+  sel.innerHTML = "";
+  devices.forEach((d, i) => {
+    const o = document.createElement("option");
+    o.value = d.deviceId; o.textContent = d.label || `${fallback} ${i + 1}`;
+    if (d.deviceId === chosen) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+async function startMeter() {
+  stopMeter();
+  try { meterStream = await navigator.mediaDevices.getUserMedia({ audio: inDeviceId ? { deviceId: { exact: inDeviceId } } : true }); }
+  catch (err) { $("audioMsg").textContent = micErrorText(err); return; }
+  const src = ctx.createMediaStreamSource(meterStream);
+  const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(an);
+  const buf = new Uint8Array(an.fftSize);
+  const tick = () => {
+    an.getByteTimeDomainData(buf);
+    let peak = 0; for (let i = 0; i < buf.length; i++) { const v = Math.abs(buf[i] - 128) / 128; if (v > peak) peak = v; }
+    const m = $("testMeter"); if (m) m.style.width = Math.min(100, Math.round(peak * 160)) + "%";
+    meterRAF = requestAnimationFrame(tick);
+  };
+  tick();
+  $("micHint").textContent = "Talk — the bar should move.";
+}
+function stopMeter() {
+  if (meterRAF) { cancelAnimationFrame(meterRAF); meterRAF = 0; }
+  if (meterStream) { meterStream.getTracks().forEach(t => t.stop()); meterStream = null; }
+  const m = $("testMeter"); if (m) m.style.width = "0";
+}
+async function applyOutput() {
+  try { if (ctx && typeof ctx.setSinkId === "function" && outDeviceId) await ctx.setSinkId(outDeviceId); } catch (e) {}
+}
+function playTestTone() {
+  ensureCtx(); applyOutput();
+  const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = 440; o.connect(g); g.connect(ctx.destination);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.25, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+  o.start(t); o.stop(t + 0.65);
+}
+function micErrorText(err) {
+  if (!err) return "Microphone unavailable.";
+  if (err.name === "NotAllowedError") return "Microphone blocked. Allow it via the site-info icon in the address bar, and enable your browser in macOS System Settings → Privacy & Security → Microphone.";
+  if (err.name === "NotFoundError") return "No microphone found. Connect your RODE and click Re-check.";
+  return "Microphone error: " + (err.message || err.name || err);
+}
+function introText(el) {
+  if (!el || !el.cues) return "";
+  const start = el.cues.startMs || 0;
+  const post = el.cues.introEndMs;
+  if (post == null || post <= start) return "No instrumental intro — the vocal is right at the top; keep it tight.";
+  return `Intro to the post: ${((post - start) / 1000).toFixed(1)}s — talk up to the yellow marker.`;
+}
 
 // ---------- Submit ----------
 $("submitBtn").onclick = async () => {
@@ -409,7 +519,9 @@ function redrawAll() {
   const s = cur.session;
   const upFrac = s.outgoing && s.outgoing.snippetDurationMs ? (cur.upFileMs - s.outgoing.snippetStartMs) / s.outgoing.snippetDurationMs : null;
   drawWave($("outWave"), s.outgoing ? s.outgoing.waveform : [], upFrac);
-  drawWave($("inWave"), s.incoming ? s.incoming.waveform : []);
+  const inFrac = s.incoming && s.incoming.snippetDurationMs && s.incoming.cues && s.incoming.cues.introEndMs != null
+    ? (s.incoming.cues.introEndMs - s.incoming.snippetStartMs) / s.incoming.snippetDurationMs : null;
+  drawWave($("inWave"), s.incoming ? s.incoming.waveform : [], inFrac);
   drawWave($("vtWave"), cur.vtBuf ? peaksFromBuffer(cur.vtBuf) : [],
     cur.vtBuf && cur.rightMs ? cur.rightMs / Math.max(1, bufMs(cur.vtBuf)) : null);
 }
