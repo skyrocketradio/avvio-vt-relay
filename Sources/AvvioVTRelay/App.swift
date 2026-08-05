@@ -81,6 +81,7 @@ struct SlotUpload: Content {
     var session: String        // session.json text
     var outgoing: File?
     var incoming: File?
+    var vt: File?              // the already-recorded take, for an editable saved VT
 }
 struct ResultUpload: Content {
     var result: String         // result.json text
@@ -127,6 +128,7 @@ func routes(_ app: Application, _ relay: Relay) throws {
         try await relay.storage.putSlot(sessionJSON: sessionData,
                                         outgoing: upload.outgoing.map { Data(buffer: $0.data) },
                                         incoming: upload.incoming.map { Data(buffer: $0.data) },
+                                        vt: upload.vt.map { Data(buffer: $0.data) },
                                         now: Date())
         return Response(status: .ok)
     }

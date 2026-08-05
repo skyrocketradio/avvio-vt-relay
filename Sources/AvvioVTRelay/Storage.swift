@@ -64,8 +64,9 @@ actor Storage {
 
     private func slotDir(_ slotId: String) -> URL { root.appendingPathComponent("slots/\(safe(slotId))", isDirectory: true) }
 
-    /// Create/replace a slot from an uploaded session + optional context audio.
-    func putSlot(sessionJSON: Data, outgoing: Data?, incoming: Data?, now: Date) throws {
+    /// Create/replace a slot from an uploaded session + optional context audio. `vt` is
+    /// the already-recorded take, present when the station pushes an editable saved VT.
+    func putSlot(sessionJSON: Data, outgoing: Data?, incoming: Data?, vt: Data?, now: Date) throws {
         let session = try JSONDecoder().decode(VTSession.self, from: sessionJSON)
         let slotId = Self.slotId(for: session.fingerprint)
         let dir = slotDir(slotId)
@@ -74,6 +75,7 @@ actor Storage {
         try sessionJSON.write(to: dir.appendingPathComponent("session.json"), options: .atomic)
         if let outgoing { try outgoing.write(to: dir.appendingPathComponent("outgoing.m4a"), options: .atomic) }
         if let incoming { try incoming.write(to: dir.appendingPathComponent("incoming.m4a"), options: .atomic) }
+        if let vt { try vt.write(to: dir.appendingPathComponent("vt.m4a"), options: .atomic) }
         let meta = SlotMeta(slotId: slotId, assignedUserID: session.assignedUserID, label: session.label,
                             airTimeISO: session.airTimeISO, status: "pending", claimedBy: nil,
                             createdAtISO: iso(now), expiresAtISO: iso(now.addingTimeInterval(Double(expiryDays) * 86_400)),
@@ -85,7 +87,7 @@ actor Storage {
 
     func slotSessionJSON(_ slotId: String) -> Data? { try? Data(contentsOf: slotDir(slotId).appendingPathComponent("session.json")) }
     func slotAudioURL(_ slotId: String, role: String) -> URL? {
-        let name = role == "outgoing" ? "outgoing.m4a" : "incoming.m4a"
+        let name = role == "outgoing" ? "outgoing.m4a" : (role == "vt" ? "vt.m4a" : "incoming.m4a")
         let url = slotDir(slotId).appendingPathComponent(name)
         return fm.fileExists(atPath: url.path) ? url : nil
     }

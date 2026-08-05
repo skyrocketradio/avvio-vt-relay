@@ -173,26 +173,29 @@ function row(e, now) {
   const li = document.createElement("li");
   const at = e.airTimeISO ? Date.parse(e.airTimeISO) : 0;
   const past = now && at && at < now;
-  // A slot the tracker has already recorded (submitted) shows as recorded even before
-  // the station pulls it in — the relay tracks the result per slot.
-  const recorded = !!(e.slotId && mySlots[e.slotId] && mySlots[e.slotId].hasResult);
-  const mineOpen = e.isEmptyVoiceTrack && e.assignedUserID === me.userID && !recorded;
+  // My VTs are editable whenever the relay has a slot for them (empty, just-submitted, or an
+  // imported saved VT the desktop keeps pushing back). Others' VTs are read-only.
+  const mine = e.assignedUserID === me.userID;
+  const hasResult = !!(e.slotId && mySlots[e.slotId] && mySlots[e.slotId].hasResult);
+  const recordedMine = mine && !!e.slotId && (hasResult || e.kind === "voiceTrack");   // recorded & editable by me
+  const openMine = mine && e.isEmptyVoiceTrack && !hasResult;                          // assigned to me, not yet recorded
   li.className = "row" + (e.isRemark ? " remark" : "") + (e.isVoiceTrack ? " vt" : "")
-    + (mineOpen ? " mine" : "") + (past ? " past" : "") + (e.kind === "stopSet" ? " spot" : "");
+    + (openMine ? " mine" : "") + (recordedMine ? " editable" : "") + (past ? " past" : "") + (e.kind === "stopSet" ? " spot" : "");
 
   const time = e.airTimeISO ? new Date(e.airTimeISO).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   let title = e.title, sub = e.artist || "";
   if (e.isRemark) { title = e.markerLabel || e.title || "Liner"; sub = ""; }
   else if (e.kind === "stopSet") { title = "Commercial break"; sub = ""; }
-  else if (e.isEmptyVoiceTrack) { sub = recorded ? "Your voice track — recorded" : (mineOpen ? "Your voice track — tap to record" : "Voice track"); }
+  else if (recordedMine) { sub = "Your voice track — recorded (tap to edit)"; }
+  else if (e.isEmptyVoiceTrack) { sub = openMine ? "Your voice track — tap to record" : "Voice track"; }
   else if (e.isVoiceTrack) { sub = "Voice track — recorded"; }
 
   li.innerHTML = `<div class="time">${time}</div>
     <div class="body"><div class="title">${escapeHtml(title)}</div>${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}</div>
     <div class="tag"></div>`;
   const tag = li.querySelector(".tag");
-  if (recorded && e.assignedUserID === me.userID) { tag.innerHTML = `<span class="badge done">Recorded</span>`; li.onclick = () => openSlot(e.slotId); }  // tap to re-record
-  else if (mineOpen) { tag.innerHTML = `<button class="rec">● Record</button>`; li.onclick = () => openSlot(e.slotId); }
+  if (recordedMine) { tag.innerHTML = `<span class="badge done">Recorded</span>`; li.onclick = () => openSlot(e.slotId); }
+  else if (openMine) { tag.innerHTML = `<button class="rec">● Record</button>`; li.onclick = () => openSlot(e.slotId); }
   else if (e.kind === "voiceTrack") { tag.innerHTML = `<span class="badge done">Recorded</span>`; }
   else if (e.isEmptyVoiceTrack) { tag.innerHTML = `<span class="badge">VT</span>`; }
   if (e.slotId) li.dataset.slot = e.slotId;
@@ -243,22 +246,19 @@ async function openSlot(slotId) {
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
 
     // If this slot was already recorded, load the take so they can listen / reposition / re-record.
+    // Two sources: a just-submitted result not yet imported, or an imported saved VT pushed back
+    // as an editable slot (audio under role "vt", cues in session.existing).
     let loaded = false;
-    if (mySlots[slotId] && mySlots[slotId].hasResult) {
-      try {
+    try {
+      if (mySlots[slotId] && mySlots[slotId].hasResult) {
         const res = await (await api(`/v1/me/slots/${encodeURIComponent(slotId)}/result`)).json();
         const buf = await (await api(`/v1/me/slots/${encodeURIComponent(slotId)}/result/audio`)).arrayBuffer();
-        cur.vtBuf = await ensureCtx().decodeAudioData(buf.slice(0));
-        cur.wavBlob = wavFromBuffer(cur.vtBuf);   // lets them resend (repositioned) without re-recording
-        const outStart = session.outgoing ? session.outgoing.snippetStartMs : 0;
-        const c = res.cues || {};
-        if (c.outgoingSegueMs != null) cur.vtAtT = Math.round((cur.outAtT || 0) + (c.outgoingSegueMs - outStart));
-        cur.inAtT = Math.round((cur.vtAtT || 0) + (c.vtSegueMs || 0));
-        if (c.fadeTargetGain != null) { cur.duck = Math.round(c.fadeTargetGain * 100); $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%"; }
-        cur.viewStartT = null; cur.viewMs = null;   // fit the whole take for editing
-        setPhase("recorded"); $("submitBtn").disabled = false; loaded = true;
-      } catch (e) { /* fall through to a fresh editor */ }
-    }
+        await applyLoadedTake(buf, res.cues || {}, session); loaded = true;
+      } else if (session.existing && session.existing.vtSegueMs != null) {
+        const buf = await (await api(`/v1/me/slots/${encodeURIComponent(slotId)}/audio/vt`)).arrayBuffer();
+        await applyLoadedTake(buf, session.existing, session); loaded = true;
+      }
+    } catch (e) { /* fall through to a fresh editor */ }
     if (!loaded) setPhase("idle");
 
     const host = $("editorHost");
@@ -267,6 +267,18 @@ async function openSlot(slotId) {
     host.classList.remove("hidden");
     requestAnimationFrame(() => { drawTimeline(); updateReadout(); host.scrollIntoView({ block: "center", behavior: "smooth" }); });
   } catch (err) { alert(err.message); }
+}
+
+// Load a recorded take (audio + cues) into the editor for listen/reposition/re-record.
+async function applyLoadedTake(arrayBuf, cues, session) {
+  cur.vtBuf = await ensureCtx().decodeAudioData(arrayBuf.slice(0));
+  cur.wavBlob = wavFromBuffer(cur.vtBuf);   // lets them resend (repositioned) without re-recording
+  const outStart = session.outgoing ? session.outgoing.snippetStartMs : 0;
+  if (cues.outgoingSegueMs != null) cur.vtAtT = Math.round((cur.outAtT || 0) + (cues.outgoingSegueMs - outStart));
+  cur.inAtT = Math.round((cur.vtAtT || 0) + (cues.vtSegueMs || 0));
+  if (cues.fadeTargetGain != null) { cur.duck = Math.round(cues.fadeTargetGain * 100); $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%"; }
+  cur.viewStartT = null; cur.viewMs = null;   // fit the whole take for editing
+  setPhase("recorded"); $("submitBtn").disabled = false;
 }
 
 async function fetchAudio(slotId, role) {
