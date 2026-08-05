@@ -36,6 +36,7 @@
       <button id="refresh" class="ghost">Refresh</button>
     </div>
     <p class="muted small">You see the whole log. Only <b>your</b> voice tracks (highlighted) can be recorded.</p>
+    <nav id="hourbar" class="hourbar hidden" aria-label="Jump to hour"></nav>
     <ol id="log" class="log"></ol>
     <p id="emptyLog" class="muted hidden">No log for this day yet.</p>
   </section>
@@ -53,6 +54,7 @@
       <div class="lane vt">
         <div class="lane-title">Your voice track</div>
         <canvas class="wave" id="vtWave" height="70"></canvas>
+        <div class="meter" title="Microphone level"><i id="meterFill"></i></div>
       </div>
       <div class="lane">
         <div class="lane-title">Going into <b id="inTitle">—</b></div>

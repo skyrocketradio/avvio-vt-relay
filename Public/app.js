@@ -8,6 +8,7 @@ let ctx = null;
 let dates = [], currentDate = null, logRows = [];
 let cur = null;           // editor working state
 let previewNodes = [];
+let hourChips = {}, hourObserver = null;
 
 // ---------- API ----------
 async function api(path, opts = {}) {
@@ -39,7 +40,7 @@ $("loginForm").onsubmit = async e => {
 };
 $("logout").onclick = logout;
 $("refresh").onclick = () => loadLog(currentDate);
-$("back").onclick = () => { stopEverything(); show("logView"); loadLog(currentDate); };
+$("back").onclick = () => { const s = cur && cur.slotId; stopEverything(); show("logView"); loadLog(currentDate, s); };
 $("datePicker").onchange = () => { currentDate = $("datePicker").value; loadLog(currentDate); };
 
 async function afterLogin() {
@@ -57,29 +58,97 @@ async function afterLogin() {
 }
 
 // ---------- Full log ----------
-async function loadLog(date) {
+async function loadLog(date, focusSlot) {
   if (!date) return;
   try {
     const view = await (await api("/v1/me/log/" + encodeURIComponent(date))).json();
     logRows = view.entries || [];
     $("logTitle").textContent = "Log — " + prettyDate(date);
-    renderLog(view);
+    renderLog(view, focusSlot);
   } catch (err) {
     if (String(err.message).includes("404")) { $("log").innerHTML = ""; $("emptyLog").classList.remove("hidden"); }
     else alert(err.message);
   }
 }
 
-function renderLog(view) {
+function renderLog(view, focusSlot) {
   const now = view.nowISO ? Date.parse(view.nowISO) : 0;
   const ol = $("log"); ol.innerHTML = "";
   $("emptyLog").classList.toggle("hidden", logRows.length > 0);
   let nowDrawn = false;
+  const hoursSeen = [], anchors = {};
   for (const e of logRows) {
     const at = e.airTimeISO ? Date.parse(e.airTimeISO) : 0;
     if (!nowDrawn && now && at >= now) { nowDrawn = true; ol.appendChild(nowDivider()); }
-    ol.appendChild(row(e, now));
+    const li = row(e, now);
+    if (e.airTimeISO) {
+      const h = new Date(e.airTimeISO).getHours();
+      if (!(h in anchors)) { anchors[h] = li; hoursSeen.push(h); li.id = "hour-" + h; li.dataset.hour = h; }
+    }
+    ol.appendChild(li);
   }
+  buildHourBar(hoursSeen, anchors);
+  if (focusSlot && scrollToRow(focusSlot, "auto")) return;   // returning from editor → land on that VT
+  landInitial(hoursSeen);
+}
+
+// ---------- Hour quick-links ----------
+function hourLabel(h) { const p = h < 12 ? "a" : "p"; let x = h % 12; if (x === 0) x = 12; return x + p; }
+function hourbarOffset() {
+  const tb = document.querySelector(".topbar"), hb = $("hourbar");
+  return (tb ? tb.offsetHeight : 48) + (hb && !hb.classList.contains("hidden") ? hb.offsetHeight : 0) + 8;
+}
+function buildHourBar(hours, anchors) {
+  const bar = $("hourbar"); bar.innerHTML = ""; hourChips = {};
+  bar.classList.toggle("hidden", hours.length === 0);
+  for (const h of hours) {
+    const b = document.createElement("button");
+    b.className = "hourchip"; b.textContent = hourLabel(h); b.dataset.hour = h;
+    b.onclick = () => scrollToHour(h, "smooth");
+    bar.appendChild(b); hourChips[h] = b;
+  }
+  setupHourSpy(anchors);
+}
+function setActiveChip(h) {
+  for (const k in hourChips) hourChips[k].classList.toggle("active", Number(k) === Number(h));
+}
+function scrollToHour(h, behavior) {
+  const el = document.getElementById("hour-" + h); if (!el) return;
+  const y = el.getBoundingClientRect().top + window.scrollY - hourbarOffset();
+  window.scrollTo({ top: Math.max(0, y), behavior: behavior || "auto" });
+  setActiveChip(h);
+}
+function scrollToRow(slotId, behavior) {
+  const el = $("log").querySelector(`.row[data-slot="${slotId}"]`);
+  if (!el) return false;
+  const y = el.getBoundingClientRect().top + window.scrollY - hourbarOffset();
+  window.scrollTo({ top: Math.max(0, y), behavior: behavior || "auto" });
+  const ent = logRows.find(e => e.slotId === slotId);
+  if (ent && ent.airTimeISO) setActiveChip(new Date(ent.airTimeISO).getHours());
+  el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1300);
+  return true;
+}
+function landInitial(hours) {
+  if (!hours.length) return;
+  if (!isTodayDate(currentDate)) { window.scrollTo({ top: 0 }); setActiveChip(hours[0]); return; }
+  const nowH = new Date().getHours();
+  let target = hours[0];
+  for (const h of hours) { if (h <= nowH) target = h; }
+  requestAnimationFrame(() => scrollToHour(target, "auto"));
+}
+function isTodayDate(d) {
+  if (!d) return false;
+  const t = new Date();
+  return d === `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+}
+function setupHourSpy(anchors) {
+  if (hourObserver) hourObserver.disconnect();
+  if (!("IntersectionObserver" in window)) return;
+  const off = hourbarOffset();
+  hourObserver = new IntersectionObserver(entries => {
+    for (const en of entries) if (en.isIntersecting) setActiveChip(Number(en.target.dataset.hour));
+  }, { rootMargin: `-${off}px 0px -70% 0px`, threshold: 0 });
+  for (const h in anchors) hourObserver.observe(anchors[h]);
 }
 
 function nowDivider() {
@@ -110,6 +179,7 @@ function row(e, now) {
   if (e.isEmptyVoiceTrack && mineEmpty) { tag.innerHTML = `<button class="rec">● Record</button>`; li.onclick = () => openSlot(e.slotId); }
   else if (e.kind === "voiceTrack") { tag.innerHTML = `<span class="badge done">Recorded</span>`; }
   else if (e.isEmptyVoiceTrack) { tag.innerHTML = `<span class="badge">VT</span>`; }
+  if (e.slotId) li.dataset.slot = e.slotId;
   return li;
 }
 
@@ -129,8 +199,8 @@ async function openSlot(slotId) {
     };
     window._cur = cur; window._ctx = ctx;
     $("editorLabel").textContent = session.label;
-    $("outTitle").textContent = session.outgoing ? session.outgoing.title : "—";
-    $("inTitle").textContent = session.incoming ? session.incoming.title : "—";
+    $("outTitle").textContent = ctxLabel(session.outgoing);
+    $("inTitle").textContent = ctxLabel(session.incoming);
     $("duckRange").value = cur.duck; $("duckVal").textContent = cur.duck + "%";
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
     setPhase("idle");
@@ -183,20 +253,35 @@ async function startRecording() {
   } else if (cur.outBuf) {
     auditionOutro();
   }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    stopAudioSources();
+    return micFail("This browser can't reach a microphone here. Use Safari or Chrome and open the site over https://.");
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     const src = ctx.createMediaStreamSource(stream);
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     const mute = ctx.createGain(); mute.gain.value = 0;
     const chunks = [];
-    proc.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    proc.onaudioprocess = ev => {
+      const d = ev.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(d));
+      let peak = 0; for (let i = 0; i < d.length; i += 16) { const v = Math.abs(d[i]); if (v > peak) peak = v; }
+      const mf = $("meterFill"); if (mf) mf.style.width = Math.min(100, Math.round(peak * 140)) + "%";
+    };
     src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
     cur.recChunks = chunks; cur.recProc = proc; cur.recStream = stream; cur.recMute = mute; cur.recSrc = src;
     cur.recStart = ctx.currentTime;
     cur.vtBuf = null; cur.wavBlob = null; cur.rightMs = 0;
-    setPhase("recording"); $("submitBtn").disabled = true;
-  } catch (err) { alert("Microphone unavailable: " + err.message); }
+    setPhase("recording"); $("submitBtn").disabled = true; $("editorMsg").textContent = "";
+  } catch (err) {
+    stopAudioSources();
+    if (err && err.name === "NotAllowedError") micFail("Microphone blocked. Click the camera/lock icon in the address bar, allow the mic for this site, then press ↑ again.");
+    else if (err && err.name === "NotFoundError") micFail("No microphone found. Check your input device, then press ↑ again.");
+    else micFail("Microphone error: " + (err && err.message ? err.message : err));
+  }
 }
+function micFail(msg) { setPhase("idle"); const mf = $("meterFill"); if (mf) mf.style.width = "0"; $("editorMsg").textContent = msg; alert(msg); }
 
 // → mark where the next song starts (fires the incoming intro)
 function markNext() {
@@ -226,6 +311,7 @@ function stopRecording() {
   const vt = ctx.createBuffer(1, Math.max(1, samples.length), sr); vt.copyToChannel(samples, 0);
   cur.vtBuf = vt; cur.wavBlob = encodeWAV(samples, sr);
   cur.recProc = cur.recStream = null;
+  const mf = $("meterFill"); if (mf) mf.style.width = "0";
   setPhase("recorded"); $("submitBtn").disabled = false;
   redrawAll();
 }
@@ -298,6 +384,7 @@ $("submitBtn").onclick = async () => {
 };
 
 // ---------- Helpers ----------
+function ctxLabel(el) { return el ? (el.artist ? `${el.title} — ${el.artist}` : el.title) : "—"; }
 function bufMs(b) { return Math.round(b.length / b.sampleRate * 1000); }
 function prettyDate(d) { const dt = new Date(d + "T12:00:00"); return dt.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }); }
 function escapeHtml(s) { return (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }

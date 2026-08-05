@@ -31,6 +31,19 @@ struct Relay: Sendable {
     let loginTTL: TimeInterval
 }
 
+/// Force browsers to revalidate the web app's static assets on every load (cheap: ETag →
+/// 304 when unchanged) so a new deploy is never masked by a stale cached `app.js`/HTML.
+struct CacheControlMiddleware: AsyncMiddleware {
+    func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
+        let response = try await next.respond(to: request)
+        let path = request.url.path
+        if path == "/" || path.hasSuffix(".html") || path.hasSuffix(".js") || path.hasSuffix(".css") {
+            response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache, must-revalidate")
+        }
+        return response
+    }
+}
+
 func configure(_ app: Application) async throws {
     let dataDir = URL(fileURLWithPath: Environment.get("AVVIO_VT_DATA") ?? "./data", isDirectory: true)
     let stationKey = Environment.get("AVVIO_VT_STATION_KEY") ?? ""
@@ -47,6 +60,8 @@ func configure(_ app: Application) async throws {
     app.http.server.configuration.hostname = Environment.get("HOST") ?? "0.0.0.0"
 
     // Serve the web tracking app (Public/) at the root, same-origin with the API.
+    // CacheControl wraps FileMiddleware so its static responses always revalidate.
+    app.middleware.use(CacheControlMiddleware())
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory, defaultFile: "index.html"))
 
     try routes(app, relay)

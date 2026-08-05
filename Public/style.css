@@ -56,6 +56,8 @@ h1 { font-size: 22px; }
 .lane-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .lane-title b { color: var(--text); }
 canvas.wave { width: 100%; height: 70px; display: block; background: var(--panel2); border-radius: 8px; }
+.meter { height: 6px; background: var(--panel2); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--accent2); transition: width .05s linear; }
 
 .controls { display: flex; flex-direction: column; gap: 18px; }
 .record-row { display: flex; align-items: center; gap: 14px; }
@@ -93,6 +95,19 @@ button.rec { background: var(--accent); border: 1px solid var(--accent); color: 
 .nowline { display: flex; align-items: center; margin: 6px 2px; }
 .nowline span { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 1px; }
 .nowline::after { content: ""; flex: 1; height: 1px; background: var(--accent); opacity: .5; margin-left: 8px; }
+
+/* Hour quick-links */
+.hourbar { position: sticky; top: 46px; z-index: 4; display: flex; gap: 6px; align-items: center;
+  overflow-x: auto; white-space: nowrap; padding: 8px 0; margin: 2px 0 10px;
+  background: var(--bg); border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+.hourbar::-webkit-scrollbar { height: 6px; }
+.hourbar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.hourchip { flex: 0 0 auto; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+.hourchip:hover { border-color: #3a444f; color: var(--text); }
+.hourchip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.log .row.flash { animation: rowflash 1.3s ease-out; }
+@keyframes rowflash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent2); } 100% { box-shadow: 0 0 0 2px transparent; } }
 
 /* Editor arrow pad */
 .hint { margin: 6px 0 12px; }
