@@ -89,6 +89,32 @@ struct VTResult: Codable, Sendable, Equatable {
     var recordedAtISO: String?
 }
 
+// MARK: - Full log view (read-only context for the tracker)
+
+struct VTLogEntryView: Codable, Sendable {
+    var entryID: Int64
+    var airTimeISO: String?
+    var kind: String
+    var category: String?
+    var title: String
+    var artist: String?
+    var durationMs: Int
+    var status: String
+    var isVoiceTrack: Bool
+    var isEmptyVoiceTrack: Bool
+    var isRemark: Bool
+    var markerLabel: String?
+    var assignedUserID: Int64?
+    var slotId: String?
+}
+
+struct VTLogView: Codable, Sendable {
+    var version: Int = RemoteVTContract.version
+    var logDate: String
+    var nowISO: String?
+    var entries: [VTLogEntryView]
+}
+
 // MARK: - Relay HTTP DTOs (mirrored on the desktop's RemoteVTSyncService)
 
 /// One tracker the station authorizes, with the PBKDF2 verifier the desktop pushes.

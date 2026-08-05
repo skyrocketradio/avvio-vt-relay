@@ -150,6 +150,22 @@ actor Storage {
         try? writeMeta(meta, in: resultDir(resultId))
     }
 
+    // MARK: Full log view (read-only context)
+
+    private var logsDir: URL { root.appendingPathComponent("logs", isDirectory: true) }
+
+    func putLog(date: String, json: Data) throws {
+        try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        try json.write(to: logsDir.appendingPathComponent("\(safe(date)).json"), options: .atomic)
+    }
+    func logJSON(date: String) -> Data? {
+        try? Data(contentsOf: logsDir.appendingPathComponent("\(safe(date)).json"))
+    }
+    func logDates() -> [String] {
+        let urls = (try? fm.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension == "json" }.map { $0.deletingPathExtension().lastPathComponent }.sorted()
+    }
+
     // MARK: Status & reaper
 
     func status() -> StationStatus {

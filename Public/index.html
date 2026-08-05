@@ -10,7 +10,11 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="dot"></span> Avvio <span class="thin">Voice Tracking</span></div>
-    <div id="whoami" class="whoami hidden"><span id="displayName"></span> <button id="logout" class="ghost">Sign out</button></div>
+    <div id="whoami" class="whoami hidden">
+      <select id="datePicker" class="datepick"></select>
+      <span id="displayName"></span>
+      <button id="logout" class="ghost">Sign out</button>
+    </div>
   </header>
 
   <!-- Login -->
@@ -25,16 +29,20 @@
     </form>
   </section>
 
-  <!-- Slot list -->
-  <section id="listView" class="view hidden">
-    <div class="listhead"><h1>Your voice tracks</h1><button id="refresh" class="ghost">Refresh</button></div>
-    <ul id="slots" class="slots"></ul>
-    <p id="emptyList" class="muted hidden">No voice tracks assigned to you right now.</p>
+  <!-- Full log (read-only, your VTs editable) -->
+  <section id="logView" class="view hidden">
+    <div class="listhead">
+      <h1 id="logTitle">Log</h1>
+      <button id="refresh" class="ghost">Refresh</button>
+    </div>
+    <p class="muted small">You see the whole log. Only <b>your</b> voice tracks (highlighted) can be recorded.</p>
+    <ol id="log" class="log"></ol>
+    <p id="emptyLog" class="muted hidden">No log for this day yet.</p>
   </section>
 
   <!-- Editor -->
   <section id="editorView" class="view hidden">
-    <button id="back" class="ghost back">‹ Back</button>
+    <button id="back" class="ghost back">‹ Back to log</button>
     <h1 id="editorLabel">Voice track</h1>
 
     <div class="lanes">
@@ -52,31 +60,25 @@
       </div>
     </div>
 
-    <div class="controls">
-      <div class="record-row">
-        <button id="recordBtn" class="record">● Record</button>
-        <span id="recStatus" class="muted">No take yet</span>
-      </div>
+    <p id="phaseHint" class="muted hint">Press ← to hear the outro, ↑ to start recording.</p>
 
-      <div class="cue">
-        <label>Start over the previous song (UP)
-          <input type="range" id="upRange" min="0" max="1000" value="800" />
-          <span id="upVal" class="val"></span>
-        </label>
-        <label>Next song starts (into your VT)
-          <input type="range" id="rightRange" min="0" max="1000" value="1000" />
-          <span id="rightVal" class="val"></span>
-        </label>
-        <label>Duck the music to
-          <input type="range" id="duckRange" min="0" max="100" value="30" />
-          <span id="duckVal" class="val"></span>
-        </label>
-      </div>
+    <!-- On-screen equivalents of the console arrow keys -->
+    <div class="pad">
+      <button id="btnLeft"  class="arrow" title="Audition the previous outro (←)">← Outro</button>
+      <button id="btnUp"    class="arrow up" title="Start recording (↑)">↑ Record</button>
+      <button id="btnRight" class="arrow" title="Start next song (→)">→ Next</button>
+      <button id="btnDown"  class="arrow" title="Stop recording (↓)">↓ Stop</button>
+      <button id="btnSpace" class="arrow" title="Preview as it airs (space)">▶ Preview</button>
+    </div>
 
+    <div class="cue">
+      <label>Duck the music to
+        <input type="range" id="duckRange" min="0" max="100" value="30" />
+        <span id="duckVal" class="val"></span>
+      </label>
       <div class="preview-row">
-        <button id="previewBtn" class="primary" disabled>▶ Preview as it airs</button>
-        <button id="stopBtn" class="ghost" disabled>■ Stop</button>
         <button id="submitBtn" class="submit" disabled>Send to station</button>
+        <button id="stopBtn" class="ghost" disabled>■ Stop preview</button>
       </div>
       <p id="editorMsg" class="muted"></p>
     </div>

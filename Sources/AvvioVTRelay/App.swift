@@ -142,6 +142,14 @@ func routes(_ app: Application, _ relay: Relay) throws {
         return await relay.storage.status()
     }
 
+    // Push the full day's log (read-only context for trackers).
+    station.on(.PUT, "log", ":date", body: .collect(maxSize: "10mb")) { req async throws -> Response in
+        try requireStation(req, relay)
+        guard let buf = req.body.data else { throw Abort(.badRequest) }
+        try await relay.storage.putLog(date: req.parameters.get("date") ?? "", json: Data(buffer: buf))
+        return Response(status: .ok)
+    }
+
     // ---- Tracker (web/iOS) endpoints ----
     app.post("v1", "auth", "login") { req async throws -> LoginResponse in
         let body = try req.content.decode(LoginRequest.self)
@@ -165,6 +173,24 @@ func routes(_ app: Application, _ relay: Relay) throws {
     me.get("slots") { req async throws -> [SlotSummary] in
         let info = try await requireTracker(req, relay)
         return await relay.storage.slotsForUser(info.userID)
+    }
+
+    // The tracker's own user id (so the client knows which VT rows it may edit).
+    me.get("whoami") { req async throws -> WhoAmI in
+        let info = try await requireTracker(req, relay)
+        return WhoAmI(userID: info.userID, displayName: info.displayName)
+    }
+
+    // Available log dates + the full read-only log for a date.
+    me.get("logdates") { req async throws -> [String] in
+        _ = try await requireTracker(req, relay)
+        return await relay.storage.logDates()
+    }
+    me.get("log", ":date") { req async throws -> Response in
+        _ = try await requireTracker(req, relay)
+        guard let json = await relay.storage.logJSON(date: req.parameters.get("date") ?? "") else { throw Abort(.notFound) }
+        var headers = HTTPHeaders(); headers.contentType = .json
+        return Response(status: .ok, headers: headers, body: .init(data: json))
     }
 
     me.get("slots", ":slotId") { req async throws -> Response in
