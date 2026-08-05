@@ -435,7 +435,8 @@ function defaultStartMs() { const m = tlModel(); return m.out ? Math.max(m.outSt
 function togglePlay() {
   if (!cur || cur.phase === "recording" || cur.phase === "recordingNext") return;
   if (cur.playing) { pausePlay(); return; }
-  previewFrom(cur.viewStartT != null ? cur.viewStartT : defaultStartMs());   // Preview always starts at the far left of the view
+  // From the placed playhead if there is one, otherwise the far left of the view.
+  previewFrom(cur.playMs != null ? cur.playMs : (cur.viewStartT != null ? cur.viewStartT : defaultStartMs()));
 }
 
 // Play the composite from an arbitrary timeline position, ducking the beds under the
