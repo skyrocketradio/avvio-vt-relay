@@ -60,6 +60,19 @@ canvas.wave { width: 100%; height: 70px; display: block; background: var(--panel
 .meter i { display: block; height: 100%; width: 0; background: var(--accent2); transition: width .05s linear; }
 .meter.big { height: 14px; margin-top: 0; }
 
+/* Draggable transition timeline */
+.tllegend { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--muted); flex-wrap: wrap; margin-bottom: 8px; }
+.tllegend b { color: var(--text); font-weight: 600; }
+.tllegend .lg::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.tllegend .out::before { background: #46525f; }
+.tllegend .vt::before { background: #2f7d4f; }
+.tllegend .in::before { background: #8ea3b8; }
+.tlzoom { margin-left: auto; display: inline-flex; gap: 6px; }
+.zbtn { padding: 4px 11px; font-size: 13px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; line-height: 1; }
+.zbtn:hover { border-color: #3a444f; }
+.tlwrap { margin-bottom: 10px; }
+.timeline { width: 100%; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; touch-action: none; cursor: grab; }
+
 /* Audio setup modal */
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 50; padding: 16px; }
 .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px;

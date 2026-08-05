@@ -199,6 +199,7 @@ async function openSlot(slotId) {
       upFileMs: session.outgoing ? session.outgoing.snippetStartMs + Math.floor((session.outgoing.snippetDurationMs) * 0.7) : 0,
       rightMs: 0, duck: Math.round((session.duckGain ?? 0.35) * 100),
       outSrc: null, outGain: null, auditionStart: 0,
+      zoom: 1, panMs: 0, playMs: null, playRAF: 0, playing: false, geo: null,
     };
     window._cur = cur; window._ctx = ctx;
     $("editorLabel").textContent = session.label;
@@ -209,7 +210,7 @@ async function openSlot(slotId) {
     $("submitBtn").disabled = true; $("stopBtn").disabled = true; $("editorMsg").textContent = "";
     setPhase("idle");
     show("editorView");
-    requestAnimationFrame(redrawAll);
+    requestAnimationFrame(() => { drawTimeline(); updateReadout(); });
   } catch (err) { alert(err.message); }
 }
 
@@ -277,7 +278,7 @@ async function startRecording() {
     cur.recChunks = chunks; cur.recProc = proc; cur.recStream = stream; cur.recMute = mute; cur.recSrc = src;
     cur.recStart = ctx.currentTime;
     cur.vtBuf = null; cur.wavBlob = null; cur.rightMs = 0;
-    setPhase("recording"); $("submitBtn").disabled = true; $("editorMsg").textContent = "";
+    setPhase("recording"); $("submitBtn").disabled = true; $("editorMsg").textContent = ""; drawTimeline();
   } catch (err) {
     stopAudioSources();
     if (err && err.name === "NotAllowedError") micFail("Microphone blocked. Click the camera/lock icon in the address bar, allow the mic for this site, then press ↑ again.");
@@ -312,7 +313,7 @@ function markNext() {
     g.gain.value = cur.duck / 100; s.start(0);
     cur.inSrc = s; cur.inGain = g;
   }
-  setPhase("recordingNext");
+  setPhase("recordingNext"); drawTimeline(); updateReadout();
 }
 
 // ↓ stop recording
@@ -332,34 +333,48 @@ function stopRecording() {
   cur.recProc = cur.recStream = null;
   const mf = $("meterFill"); if (mf) mf.style.width = "0";
   setPhase("recorded"); $("submitBtn").disabled = false;
-  redrawAll();
+  drawTimeline(); updateReadout();
 }
 
-// space — preview the composite
+// space — preview the composite as it will air, with a playhead sweeping the timeline
 function previewComposite() {
   if (!cur || !cur.vtBuf) return;
   stopPreview();
-  const c = ctx, t0 = c.currentTime + 0.12, duck = cur.duck / 100;
-  const s = cur.session.outgoing;
-  const upInBuf = s ? (cur.upFileMs - s.snippetStartMs) / 1000 : 0;
-  const lead = Math.min((cur.session.leadMs || 7000) / 1000, Math.max(0, upInBuf));
-  const vtAt = t0 + lead, vtDur = cur.vtBuf.duration;
+  ensureCtx(); applyOutput();
+  const m = tlModel(), duck = cur.duck / 100;
+  const lead = Math.min(m.Tvt, (cur.session.leadMs || 7000));   // ms of outro run-up before the talk
+  const startMs = Math.max(0, m.Tvt - lead);
+  const t0 = ctx.currentTime + 0.12;
+  const rt = ms => t0 + (ms - startMs) / 1000;                  // composite-ms → realtime
   if (cur.outBuf) {
-    const g = c.createGain(); const src = c.createBufferSource(); src.buffer = cur.outBuf; src.connect(g); g.connect(c.destination);
-    g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, vtAt); g.gain.linearRampToValueAtTime(duck, vtAt + 0.5);
-    src.start(t0, Math.max(0, upInBuf - lead)); previewNodes.push(src, g);
+    const g = ctx.createGain(), src = ctx.createBufferSource(); src.buffer = cur.outBuf; src.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, rt(m.Tvt)); g.gain.linearRampToValueAtTime(duck, rt(m.Tvt) + 0.4);
+    src.start(t0, startMs / 1000); previewNodes.push(src, g);
   }
-  { const src = c.createBufferSource(); src.buffer = cur.vtBuf; src.connect(c.destination); src.start(vtAt); previewNodes.push(src); }
+  { const src = ctx.createBufferSource(); src.buffer = cur.vtBuf; src.connect(ctx.destination); src.start(rt(m.Tvt)); previewNodes.push(src); }
   if (cur.inBuf) {
-    const inAt = vtAt + cur.rightMs / 1000;
-    const g = c.createGain(); const src = c.createBufferSource(); src.buffer = cur.inBuf; src.connect(g); g.connect(c.destination);
-    g.gain.setValueAtTime(duck, inAt); g.gain.linearRampToValueAtTime(1, vtAt + vtDur + 0.4);
+    const inAt = rt(m.Tin), vtEnd = rt(m.Tvt + m.vtDur);
+    const g = ctx.createGain(), src = ctx.createBufferSource(); src.buffer = cur.inBuf; src.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(duck, inAt); g.gain.linearRampToValueAtTime(1, Math.max(inAt + 0.3, vtEnd + 0.4));
     src.start(inAt); previewNodes.push(src, g);
   }
-  $("stopBtn").disabled = false;
+  cur.playing = true; $("stopBtn").disabled = false;
+  const step = () => {
+    if (!cur || !cur.playing) return;
+    cur.playMs = startMs + (ctx.currentTime - t0) * 1000;
+    drawTimeline();
+    if (cur.playMs < m.total + 300) cur.playRAF = requestAnimationFrame(step); else stopPreview();
+  };
+  cur.playRAF = requestAnimationFrame(step);
 }
 
-function stopPreview() { for (const n of previewNodes) { try { n.stop && n.stop(); n.disconnect && n.disconnect(); } catch (e) {} } previewNodes = []; $("stopBtn").disabled = true; }
+function stopPreview() {
+  for (const n of previewNodes) { try { n.stop && n.stop(); n.disconnect && n.disconnect(); } catch (e) {} }
+  previewNodes = [];
+  if (cur) { cur.playing = false; if (cur.playRAF) cancelAnimationFrame(cur.playRAF); cur.playRAF = 0; cur.playMs = null; }
+  $("stopBtn").disabled = true;
+  if (cur && !$("editorView").classList.contains("hidden")) drawTimeline();
+}
 function stopAudioSources() { for (const n of [cur && cur.outSrc, cur && cur.inSrc]) { try { n && n.stop(); n && n.disconnect(); } catch (e) {} } if (cur) { cur.outSrc = cur.inSrc = null; } }
 function stopEverything() { stopPreview(); stopAudioSources(); if (cur && cur.recStream) { try { cur.recProc.disconnect(); cur.recStream.getTracks().forEach(t => t.stop()); } catch (e) {} } }
 
@@ -513,29 +528,159 @@ function peaksFromBuffer(buf, n = 400) {
   for (let i = 0; i < n; i++) { let p = 0; for (let j = 0; j < block; j++) { const v = Math.abs(data[i * block + j] || 0); if (v > p) p = v; } out.push(p); }
   return out;
 }
-function redrawAll() {
-  if (!cur) return;
-  if (!$("outWave").clientWidth) { requestAnimationFrame(redrawAll); return; }
-  const s = cur.session;
-  const upFrac = s.outgoing && s.outgoing.snippetDurationMs ? (cur.upFileMs - s.outgoing.snippetStartMs) / s.outgoing.snippetDurationMs : null;
-  drawWave($("outWave"), s.outgoing ? s.outgoing.waveform : [], upFrac);
-  const inFrac = s.incoming && s.incoming.snippetDurationMs && s.incoming.cues && s.incoming.cues.introEndMs != null
-    ? (s.incoming.cues.introEndMs - s.incoming.snippetStartMs) / s.incoming.snippetDurationMs : null;
-  drawWave($("inWave"), s.incoming ? s.incoming.waveform : [], inFrac);
-  drawWave($("vtWave"), cur.vtBuf ? peaksFromBuffer(cur.vtBuf) : [],
-    cur.vtBuf && cur.rightMs ? cur.rightMs / Math.max(1, bufMs(cur.vtBuf)) : null);
+// ---------- Timeline (draggable, zoomable transition editor) ----------
+const TL = { TOP: 8, LANE_H: 52, GAP: 12, PADX: 10, RULER: 20 };
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// The whole transition on one shared time axis (ms). t=0 = start of the outgoing snippet.
+function tlModel() {
+  const s = cur.session, out = s.outgoing, inc = s.incoming;
+  const outDur = out ? out.snippetDurationMs : 0;
+  const inDur = inc ? inc.snippetDurationMs : 0;
+  const vtDur = cur.vtBuf ? bufMs(cur.vtBuf) : 0;
+  const Tvt = out ? clamp(cur.upFileMs - out.snippetStartMs, 0, outDur) : 0;   // where the talk starts over the outro
+  const rightMs = cur.rightMs || 0;
+  const Tin = Tvt + rightMs;                                                    // where the next song fires
+  const post = (inc && inc.cues && inc.cues.introEndMs != null) ? Tin + (inc.cues.introEndMs - inc.snippetStartMs) : null;
+  const total = Math.max(outDur, Tin + inDur, Tvt + vtDur, 1000);
+  return { out, inc, outDur, inDur, vtDur, Tvt, rightMs, Tin, post, total };
 }
-function drawWave(canvas, peaks, markerFrac) {
-  const dpr = window.devicePixelRatio || 1, H = 70, w = canvas.clientWidth;
-  if (!w) return;
-  canvas.width = w * dpr; canvas.height = H * dpr;
-  const g = canvas.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, H);
-  g.fillStyle = "#46525f";
-  const n = peaks.length, bw = n ? w / n : w;
-  for (let i = 0; i < n; i++) { const ph = Math.max(1, peaks[i] * (H - 6)); g.fillRect(i * bw, (H - ph) / 2, Math.max(1, bw - 1), ph); }
-  if (markerFrac != null && markerFrac >= 0 && markerFrac <= 1) { g.fillStyle = "#c79510"; g.fillRect(markerFrac * w - 1, 0, 2, H); }
+
+function roundRect(g, x, y, w, h, r) {
+  w = Math.max(2, w); r = Math.min(r, h / 2, w / 2);
+  g.beginPath(); g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
-window.addEventListener("resize", redrawAll);
+function vline(g, x, y, h, color) { g.fillStyle = color; g.fillRect(x - 1, y, 2, h); }
+function tlLabel(g, text, x, y, color) { g.fillStyle = color; g.font = "10px -apple-system, BlinkMacSystemFont, sans-serif"; g.fillText(text, x, y); }
+function drawBlock(g, x, y, w, h, peaks, wave, bg, border) {
+  g.save(); roundRect(g, x, y, w, h, 6); g.clip();
+  g.fillStyle = bg; g.fillRect(x, y, Math.max(2, w), h);
+  const n = peaks ? peaks.length : 0;
+  if (n) { const bw = Math.max(2, w) / n; g.fillStyle = wave; for (let i = 0; i < n; i++) { const ph = Math.max(1, peaks[i] * (h - 12)); g.fillRect(x + i * bw, y + (h - ph) / 2, Math.max(1, bw - 0.5), ph); } }
+  g.restore();
+  g.strokeStyle = border; g.lineWidth = 1.5; roundRect(g, x, y, w, h, 6); g.stroke();
+}
+
+function drawTimeline() {
+  const cv = $("timeline"); if (!cv || !cur) return;
+  const W = cv.clientWidth; if (!W) { requestAnimationFrame(drawTimeline); return; }
+  const dpr = window.devicePixelRatio || 1;
+  const H = TL.TOP + 3 * TL.LANE_H + 2 * TL.GAP + TL.RULER;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+
+  const m = tlModel();
+  const innerW = W - 2 * TL.PADX;
+  const pxPerMs = (innerW / m.total) * (cur.zoom || 1);
+  const visibleMs = innerW / pxPerMs;
+  cur.panMs = clamp(cur.panMs || 0, 0, Math.max(0, m.total - visibleMs));
+  const xOf = ms => TL.PADX + (ms - cur.panMs) * pxPerMs;
+  const yOut = TL.TOP, yVt = TL.TOP + TL.LANE_H + TL.GAP, yIn = TL.TOP + 2 * (TL.LANE_H + TL.GAP);
+
+  for (const y of [yOut, yVt, yIn]) { g.fillStyle = "#0e1216"; roundRect(g, TL.PADX, y, innerW, TL.LANE_H, 6); g.fill(); }
+
+  if (m.out) {
+    drawBlock(g, xOf(0), yOut, m.outDur * pxPerMs, TL.LANE_H, m.out.waveform, "#46525f", "#131a20", "rgba(255,255,255,.10)");
+    g.fillStyle = "rgba(226,59,59,.12)"; g.fillRect(xOf(m.Tvt), yOut, (m.outDur - m.Tvt) * pxPerMs, TL.LANE_H);
+    vline(g, xOf(m.Tvt), yOut, TL.LANE_H, "#e23b3b");
+  }
+  let vtRect = null;
+  if (m.vtDur > 0) {
+    const x0 = xOf(m.Tvt), w = m.vtDur * pxPerMs;
+    drawBlock(g, x0, yVt, w, TL.LANE_H, peaksFromBuffer(cur.vtBuf), "#74d69a", "#16341f", "#2f7d4f");
+    vtRect = { x: x0, y: yVt, w, h: TL.LANE_H };
+  }
+  let inRect = null;
+  if (m.inc) {
+    const x0 = xOf(m.Tin), w = m.inDur * pxPerMs;
+    drawBlock(g, x0, yIn, w, TL.LANE_H, m.inc.waveform, "#8ea3b8", "#141b22", "#3a444f");
+    if (m.post != null) {
+      g.fillStyle = "rgba(199,149,16,.16)"; g.fillRect(xOf(m.Tin), yIn, (m.post - m.Tin) * pxPerMs, TL.LANE_H);
+      vline(g, xOf(m.post), yIn, TL.LANE_H, "#c79510"); tlLabel(g, "POST", xOf(m.post) + 4, yIn + 13, "#e8c874");
+    }
+    inRect = { x: x0, y: yIn, w, h: TL.LANE_H };
+  }
+
+  tlLabel(g, "OUT", TL.PADX + 5, yOut + 13, "#8b97a6");
+  tlLabel(g, "VT", TL.PADX + 5, yVt + 13, "#8b97a6");
+  tlLabel(g, "IN", TL.PADX + 5, yIn + 13, "#8b97a6");
+
+  const rulerY = yIn + TL.LANE_H + 5;
+  g.fillStyle = "#242c34"; g.fillRect(TL.PADX, rulerY, innerW, 1);
+  const stepS = visibleMs > 60000 ? 15 : visibleMs > 30000 ? 10 : visibleMs > 12000 ? 5 : visibleMs > 5000 ? 2 : 1;
+  for (let s = Math.ceil(cur.panMs / 1000 / stepS) * stepS; s * 1000 <= cur.panMs + visibleMs; s += stepS) {
+    const x = xOf(s * 1000); if (x < TL.PADX || x > W - TL.PADX) continue;
+    g.fillStyle = "#2c343d"; g.fillRect(x, rulerY, 1, 4);
+    g.fillStyle = "#6b7684"; g.font = "10px -apple-system, sans-serif"; g.fillText(s + "s", x + 2, rulerY + 14);
+  }
+
+  if (cur.playMs != null && cur.playMs >= cur.panMs && cur.playMs <= cur.panMs + visibleMs)
+    vline(g, xOf(cur.playMs), TL.TOP, 3 * TL.LANE_H + 2 * TL.GAP, "#ffffff");
+
+  cur.geo = { vtRect, inRect, pxPerMs, visibleMs, total: m.total };
+}
+
+function updateReadout() {
+  if (!cur || !cur.session) return;
+  const m = tlModel(), bits = [];
+  if (m.out) bits.push(`Talk-up: ${((m.outDur - m.Tvt) / 1000).toFixed(1)}s of outro left when you start`);
+  if (m.vtDur) bits.push(`VT ${(m.vtDur / 1000).toFixed(1)}s`);
+  if (m.inc) bits.push(`next song at +${(m.rightMs / 1000).toFixed(1)}s`);
+  const post = introText(m.inc);
+  $("introInfo").textContent = bits.join(" · ") + (post ? " · " + post : "");
+}
+
+function tlZoom(factor, anchorX) {
+  if (!cur || !cur.geo) return;
+  const cv = $("timeline"), W = cv.clientWidth, ax = anchorX == null ? W / 2 : anchorX;
+  const anchorMs = cur.panMs + (ax - TL.PADX) / cur.geo.pxPerMs;
+  cur.zoom = clamp((cur.zoom || 1) * factor, 1, 32);
+  const m = tlModel(), pxPerMs = ((W - 2 * TL.PADX) / m.total) * cur.zoom;
+  cur.panMs = anchorMs - (ax - TL.PADX) / pxPerMs;
+  drawTimeline();
+}
+
+let tlDrag = null;
+function tlXY(e) { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function tlHit(rect, x, y) { return rect && x >= rect.x - 7 && x <= rect.x + rect.w + 7 && y >= rect.y - 2 && y <= rect.y + rect.h + 2; }
+
+(function wireTimeline() {
+  const cv = $("timeline"); if (!cv) return;
+  cv.addEventListener("wheel", e => { if (!cur) return; e.preventDefault(); tlZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, tlXY(e).x); }, { passive: false });
+  cv.addEventListener("pointerdown", e => {
+    if (!cur || !cur.geo) return;
+    const { x, y } = tlXY(e);
+    const t = tlHit(cur.geo.vtRect, x, y) ? "vt" : tlHit(cur.geo.inRect, x, y) ? "in" : "pan";
+    tlDrag = { t, startX: x, origUp: cur.upFileMs, origRight: cur.rightMs || 0, origPan: cur.panMs || 0,
+               outStart: cur.session.outgoing ? cur.session.outgoing.snippetStartMs : 0,
+               outDur: cur.session.outgoing ? cur.session.outgoing.snippetDurationMs : 0,
+               vtDur: cur.vtBuf ? bufMs(cur.vtBuf) : 0, pxPerMs: cur.geo.pxPerMs };
+    cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing";
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!tlDrag) return;
+    const dxMs = (tlXY(e).x - tlDrag.startX) / tlDrag.pxPerMs;
+    if (tlDrag.t === "vt") {
+      const origTvt = tlDrag.origUp - tlDrag.outStart;
+      cur.upFileMs = tlDrag.outStart + Math.round(clamp(origTvt + dxMs, 0, tlDrag.outDur)); updateReadout();
+    } else if (tlDrag.t === "in") {
+      const cap = tlDrag.vtDur > 0 ? tlDrag.vtDur : tlDrag.outDur;
+      cur.rightMs = Math.round(clamp(tlDrag.origRight + dxMs, 0, cap)); updateReadout();
+    } else {
+      cur.panMs = tlDrag.origPan - dxMs;
+    }
+    drawTimeline();
+  });
+  const end = () => { if (tlDrag) { tlDrag = null; cv.style.cursor = "grab"; } };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+  $("tlIn").onclick = () => tlZoom(1.4);
+  $("tlOut").onclick = () => tlZoom(1 / 1.4);
+  $("tlFit").onclick = () => { if (cur) { cur.zoom = 1; cur.panMs = 0; drawTimeline(); } };
+})();
+window.addEventListener("resize", () => { if (cur && !$("editorView").classList.contains("hidden")) drawTimeline(); });
 
 // Boot
 if (token) { ensureCtx(); afterLogin(); } else { show("loginView"); }

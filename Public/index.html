@@ -47,22 +47,20 @@
     <button id="back" class="ghost back">‹ Back to log</button>
     <h1 id="editorLabel">Voice track</h1>
 
-    <div class="lanes">
-      <div class="lane">
-        <div class="lane-title">Coming out of <b id="outTitle">—</b></div>
-        <canvas class="wave" id="outWave" height="70"></canvas>
-      </div>
-      <div class="lane vt">
-        <div class="lane-title">Your voice track</div>
-        <canvas class="wave" id="vtWave" height="70"></canvas>
-        <div class="meter" title="Microphone level"><i id="meterFill"></i></div>
-      </div>
-      <div class="lane">
-        <div class="lane-title">Going into <b id="inTitle">—</b></div>
-        <canvas class="wave" id="inWave" height="70"></canvas>
-        <div id="introInfo" class="muted small"></div>
-      </div>
+    <div class="tllegend">
+      <span class="lg out">Out: <b id="outTitle">—</b></span>
+      <span class="lg vt">Your VT</span>
+      <span class="lg in">In: <b id="inTitle">—</b></span>
+      <span class="tlzoom">
+        <button id="tlOut" class="zbtn" title="Zoom out">−</button>
+        <button id="tlFit" class="zbtn" title="Fit to window">Fit</button>
+        <button id="tlIn" class="zbtn" title="Zoom in">+</button>
+      </span>
     </div>
+    <div class="tlwrap"><canvas id="timeline" class="timeline"></canvas></div>
+    <div class="meter" title="Microphone level"><i id="meterFill"></i></div>
+    <div id="introInfo" class="muted small"></div>
+    <p class="muted small">Drag the green <b>VT</b> block to set where you talk over the outro; drag the <b>incoming song</b> to set where it starts. Scroll to zoom (or use −/+), drag empty space to pan.</p>
 
     <p id="phaseHint" class="muted hint">Press ← to hear the outro, ↑ to start recording.</p>
 
